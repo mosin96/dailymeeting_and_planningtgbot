@@ -1,0 +1,342 @@
+"""Daily standup team model and pure rotation logic (no DB, no aiogram)."""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from html import escape
+from typing import List, Optional, Tuple
+
+VACATION_DATE_RE = re.compile(r"(\d{1,2})[./](\d{1,2})[./](\d{4})")
+ISO_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+
+@dataclass
+class DailyMember:
+    chat_id: int
+    position: int
+    first_name: str
+    user_id: Optional[int] = None
+    username: Optional[str] = None
+    skip_date: Optional[str] = None
+    vacation_until: Optional[str] = None
+
+    def is_skipped(self, today: str) -> bool:
+        return self.skip_date == today
+
+    def is_on_vacation(self, today: str) -> bool:
+        return bool(self.vacation_until) and today <= self.vacation_until
+
+    def is_unavailable(self, today: str) -> bool:
+        return self.is_skipped(today) or self.is_on_vacation(today)
+
+    @property
+    def display_name(self) -> str:
+        if self.username:
+            return "@{}".format(self.username)
+        return self.first_name
+
+    @property
+    def plain_name(self) -> str:
+        return self.first_name
+
+    @property
+    def mention(self) -> str:
+        """Telegram-parseable mention: @username, tg://user link, or plain name.
+
+        The bot sends with HTML parse mode, so members without a username get
+        a clickable user link instead of a bare name.
+        """
+        if self.user_id is not None and not self.username:
+            return '<a href="tg://user?id={}">{}</a>'.format(
+                self.user_id, escape(self.first_name)
+            )
+        return self.display_name
+
+    def to_dict(self) -> dict:
+        return {
+            "chat_id": self.chat_id,
+            "position": self.position,
+            "user_id": self.user_id,
+            "username": self.username,
+            "first_name": self.first_name,
+            "skip_date": self.skip_date,
+            "vacation_until": self.vacation_until,
+        }
+
+    @classmethod
+    def from_dict(cls, dct: dict) -> "DailyMember":
+        return cls(
+            chat_id=dct["chat_id"],
+            position=dct["position"],
+            first_name=dct["first_name"],
+            user_id=dct.get("user_id"),
+            username=dct.get("username"),
+            skip_date=dct.get("skip_date"),
+            vacation_until=dct.get("vacation_until"),
+        )
+
+
+@dataclass
+class DailyChat:
+    chat_id: int
+    daily_time: str = "10:00"
+    next_index: int = 0
+    last_reminder_date: Optional[str] = None
+    last_start_date: Optional[str] = None
+    last_catchup_date: Optional[str] = None
+    last_advance_date: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "chat_id": self.chat_id,
+            "daily_time": self.daily_time,
+            "next_index": self.next_index,
+            "last_reminder_date": self.last_reminder_date,
+            "last_start_date": self.last_start_date,
+            "last_catchup_date": self.last_catchup_date,
+            "last_advance_date": self.last_advance_date,
+        }
+
+    @classmethod
+    def from_dict(cls, dct: dict) -> "DailyChat":
+        return cls(
+            chat_id=dct["chat_id"],
+            daily_time=dct.get("daily_time", "10:00"),
+            next_index=dct.get("next_index", 0),
+            last_reminder_date=dct.get("last_reminder_date"),
+            last_start_date=dct.get("last_start_date"),
+            last_catchup_date=dct.get("last_catchup_date"),
+            last_advance_date=dct.get("last_advance_date"),
+        )
+
+
+def _next_non_skipped(members: List[DailyMember], start_pos: int, today: str) -> Optional[DailyMember]:
+    """Scan cyclically from start_pos for the first available member.
+
+    Available = not skipped today and not on vacation. Returns the member
+    itself (positions are 0..n-1 in sorted order).
+    """
+    if not members:
+        return None
+    n = len(members)
+    for offset in range(n):
+        member = members[(start_pos + offset) % n]
+        if not member.is_unavailable(today):
+            return member
+    return None
+
+
+def next_leader(members: List[DailyMember], next_index: int, today: str) -> Optional[DailyMember]:
+    """Return the member who leads today, skipping those with skip_date == today."""
+    if not members:
+        return None
+    return _next_non_skipped(members, next_index % len(members), today)
+
+
+def today_leader(
+    members: List[DailyMember],
+    next_index: int,
+    today: str,
+) -> Optional[DailyMember]:
+    """Today's leader.
+
+    In the 23:59-advance model next_index points AT today's leader for the
+    whole day: the scheduler's nightly pass (23:59) moves it to the next
+    workday's leader, so no post-reminder adjustment is needed. Used by /who,
+    /daily and /substitute to stay consistent with the announced reminder.
+    """
+    return next_leader(members, next_index, today)
+
+
+def advance_next(members: List[DailyMember], leader_pos: int) -> int:
+    """New next_index after leader at leader_pos leads: move past them."""
+    if not members:
+        return 0
+    return (leader_pos + 1) % len(members)
+
+
+def set_leader(
+    members: List[DailyMember],
+    next_index: int,
+    leader_pos: int,
+    today: str,
+) -> Tuple[int, Optional[str]]:
+    """Manually set today's leader to the member at leader_pos.
+
+    Semantics agreed with the user: the chosen member leads TODAY, the
+    rotation continues from the member after them — no queue reordering.
+    Implemented by pointing next_index AT the chosen member (same invariant
+    as the scheduler's model, where next_index points at today's leader and
+    the nightly 23:59 pass advances past them).
+
+    Rejects unavailable members (skipped today or on vacation).
+
+    Returns (new_next_index, error_message|None).
+    """
+    if not members:
+        return next_index, "Команда пуста"
+    chosen = None
+    for member in members:
+        if member.position == leader_pos:
+            chosen = member
+            break
+    if chosen is None:
+        return next_index, "Участник не найден"
+    if chosen.is_unavailable(today):
+        return next_index, "Недоступен сегодня (отпуск или пропуск)"
+    return chosen.position, None
+
+
+def apply_substitute(
+    members: List[DailyMember],
+    next_index: int,
+    leader_pos: int,
+    today: str,
+) -> Tuple[List[DailyMember], int, Optional[str]]:
+    """Substitute A (today's leader) with B = next non-skipped member after A.
+
+    Semantics agreed with the user: swap positions A and B in the queue.
+    Today B leads (slot A), tomorrow A leads (after advance). next_index
+    does NOT move here: it already points at (A_pos + 1), which after the
+    swap is A's position — so tomorrow A is picked.
+
+    A is identified by its POSITION (the payload of the substitute button /
+    the announced leader). Position is the stable rotation identity that works
+    even for members added by @username who have user_id=None (a user_id-based
+    lookup would miss them, and next_leader(members, next_index) would return
+    the NEXT leader (B) after the scheduler advanced next_index past A).
+
+    Returns (new members, new next_index, error_message|None).
+    """
+    n = len(members)
+    if n == 0:
+        return members, next_index, "Команда пуста"
+    if n == 1:
+        return members, next_index, "Некого подменять"
+
+    leader = None
+    for member in members:
+        if member.position == leader_pos:
+            leader = member
+            break
+    if leader is None:
+        leader = next_leader(members, next_index, today)
+    if leader is None:
+        return members, next_index, "Все пропущены сегодня, некого подменять"
+    if leader.is_unavailable(today):
+        return members, next_index, "Подмена доступна для сегодняшнего ведущего"
+
+    a_pos = leader.position
+    # B = next available member strictly after A (cyclic)
+    b_member = None
+    for offset in range(1, n):
+        cand = members[(a_pos + offset) % n]
+        if not cand.is_unavailable(today):
+            b_member = cand
+            break
+    if b_member is None:
+        return members, next_index, "Некого подменять"
+
+    b_pos = b_member.position
+    new_members = [m for m in members]
+    new_members[a_pos], new_members[b_pos] = new_members[b_pos], new_members[a_pos]
+    # fix positions
+    new_members[a_pos].position = a_pos
+    new_members[b_pos].position = b_pos
+
+    b_name = b_member.display_name
+    a_name = leader.display_name
+    return new_members, next_index, "Сегодня ведёт {}, завтра {}".format(b_name, a_name)
+
+
+def apply_skip(
+    members: List[DailyMember],
+    next_index: int,
+    target_pos: int,
+    today: str,
+) -> Tuple[List[DailyMember], int, Optional[DailyMember], Optional[str]]:
+    """One-time skip: mark the member at the given POSITION skip_date = today.
+
+    The skip button payload carries the leader's position (works even for
+    members with user_id=None, added by @username). If the skipped member
+    would be today's leader, re-pick the leader from the remaining members
+    and point next_index AT them (the nightly 23:59 pass advances past the
+    leader, so next_index must keep pointing at today's leader all day).
+
+    Returns (new members, new next_index, new leader|None, error|None).
+    """
+    if not members:
+        return members, next_index, None, "Команда пуста"
+
+    target = None
+    for member in members:
+        if member.position == target_pos:
+            target = member
+            break
+    if target is None:
+        # fallback: allow skipping today's leader by rotation position alone
+        leader = next_leader(members, next_index, today)
+        if leader is not None:
+            target = leader
+    if target is None:
+        return members, next_index, None, "Участник не найден в команде"
+    if target.is_on_vacation(today):
+        return members, next_index, None, "Участник в отпуске, пропуск не нужен"
+
+    target.skip_date = today
+    new_leader = next_leader(members, next_index, today)
+    if new_leader is None:
+        return members, next_index, None, None  # all unavailable
+    new_next = new_leader.position
+    return members, new_next, new_leader, None
+
+
+def member_list_text(members: List[DailyMember]) -> str:
+    if not members:
+        return "Команда пуста. Добавьте участников через /team"
+    lines = []
+    for m in members:
+        line = "{}. {}".format(m.position + 1, m.display_name)
+        if m.vacation_until:
+            line += " (в отпуске до {})".format(format_ru_date(m.vacation_until))
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def parse_vacation_date(text: str) -> Optional[str]:
+    """Parse a vacation end date: 'ДД.ММ.ГГГГ' or 'ГГГГ-ММ-ДД' -> ISO.
+
+    Returns None for anything unparseable. The date is inclusive: the member
+    is on vacation while today <= vacation_until.
+    """
+    if not text:
+        return None
+    match = VACATION_DATE_RE.match(text.strip())
+    if match:
+        day, month, year = (int(g) for g in match.groups())
+    else:
+        match = ISO_DATE_RE.match(text.strip())
+        if not match:
+            return None
+        year, month, day = (int(g) for g in match.groups())
+    if not (1 <= day <= 31 and 1 <= month <= 12 and 2000 <= year <= 2100):
+        return None
+    return "{:04d}-{:02d}-{:02d}".format(year, month, day)
+
+
+def format_ru_date(iso: str) -> str:
+    """ISO 'YYYY-MM-DD' -> human-readable 'ДД.ММ.ГГГГ'."""
+    year, month, day = iso.split("-")
+    return "{}.{}.{}".format(day, month, year)
+
+
+async def is_today_workday(workday_client, tz) -> bool:
+    """True if today (in tz) is a workday per the client's calendar."""
+    today = today_in_tz(tz)
+    return await workday_client.is_workday(today)
+
+
+def today_in_tz(tz) -> "datetime.date":
+    """Today's date in the given timezone (datetime.date)."""
+    import datetime
+    return datetime.datetime.now(tz).date()
