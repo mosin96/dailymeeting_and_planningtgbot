@@ -17,6 +17,7 @@ PREFIX_HELP = "daily:help"
 PREFIX_MENU = "daily:menu"
 PREFIX_ADD = "daily:add"
 PREFIX_REMOVE = "daily:remove:"
+PREFIX_REMOVE_LIST = "daily:removelist"
 PREFIX_BACK = "daily:back"
 PREFIX_LEADER = "daily:lead"
 PREFIX_LEAD = "daily:lead:"
@@ -81,6 +82,22 @@ def build_member_picker_markup(members: List[DailyMember], prefix: str) -> Inlin
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def build_remove_markup(members: List[DailyMember]) -> InlineKeyboardMarkup:
+    """Buttons for the dedicated removal list: one member per row (vertically),
+    each prefixed with a cross, plus a back button to the team view."""
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="❌ {}".format(m.display_name),
+                callback_data="{}{}".format(PREFIX_REMOVE, m.position),
+            )
+        ]
+        for m in members
+    ]
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_TEAM)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def show_menu(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
     chat_id = message.chat.id
     chat = await daily.get_chat(chat_id)
@@ -107,19 +124,25 @@ async def show_team(message: Message, daily: DailyRegistry, edit: bool = False) 
     members = await daily.get_members(chat_id)
     text = "Состав команды:\n" + member_list_text(members)
     rows = [
-        [InlineKeyboardButton(text="➕ Добавить", callback_data=PREFIX_ADD)]
+        [InlineKeyboardButton(text="➕ Добавить", callback_data=PREFIX_ADD)],
+        [InlineKeyboardButton(text="✖️ Удалить участника", callback_data=PREFIX_REMOVE_LIST)],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_MENU)],
     ]
-    remove_row = [
-        InlineKeyboardButton(
-            text="❌ {}".format(m.display_name),
-            callback_data="{}{}".format(PREFIX_REMOVE, m.position),
-        )
-        for m in members
-    ]
-    if remove_row:
-        rows.append(remove_row)
-    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_MENU)])
     markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    if edit:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
+
+
+async def show_remove_list(message: Message, daily: DailyRegistry, edit: bool = False) -> None:
+    chat_id = message.chat.id
+    members = await daily.get_members(chat_id)
+    if not members:
+        text = "Команда пуста. Добавьте участников через /team"
+    else:
+        text = "Удаление участников:\n" + member_list_text(members)
+    markup = build_remove_markup(members)
     if edit:
         await message.edit_text(text, reply_markup=markup)
     else:

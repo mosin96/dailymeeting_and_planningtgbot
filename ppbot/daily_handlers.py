@@ -30,6 +30,7 @@ from ppbot.daily_ui import (
     PREFIX_LEADER,
     PREFIX_MENU,
     PREFIX_REMOVE,
+    PREFIX_REMOVE_LIST,
     PREFIX_SKIP,
     PREFIX_SUB,
     PREFIX_TEAM,
@@ -39,6 +40,7 @@ from ppbot.daily_ui import (
     PREFIX_WHO,
     build_member_picker_markup,
     show_menu,
+    show_remove_list,
     show_team,
     who_reply,
 )
@@ -105,6 +107,11 @@ def create_router() -> Router:
         await callback.message.answer("Пришлите @username или перешлите сообщение участника")
         await callback.answer()
 
+    @r.callback_query(F.data == PREFIX_REMOVE_LIST)
+    async def remove_list_callback(callback: CallbackQuery, daily: DailyRegistry):
+        await show_remove_list(callback.message, daily, edit=True)
+        await callback.answer()
+
     @r.callback_query(F.data.regexp(r"^{}(.+)$".format(PREFIX_REMOVE)))
     async def remove_member_callback(callback: CallbackQuery, daily: DailyRegistry):
         position = int(callback.data[len(PREFIX_REMOVE):])
@@ -113,7 +120,7 @@ def create_router() -> Router:
         if chat is None:
             chat = DailyChat(chat_id=callback.message.chat.id)
             await daily.upsert_chat(chat)
-        await show_team(callback.message, daily, edit=True)
+        await show_remove_list(callback.message, daily, edit=True)
         await callback.answer()
 
     @r.message(AddMember.waiting)

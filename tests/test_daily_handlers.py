@@ -716,6 +716,56 @@ async def test_team_callback_edits_in_place(dp, bot, session, storage):
     assert "Состав команды" in edits[0]["text"]
     assert not [p for m, p in session.calls if m == "sendMessage"]
 
+    # removal is a single dedicated button, not inline per-member crosses
+    flat = [
+        btn["callback_data"]
+        for row in edits[0]["reply_markup"]["inline_keyboard"]
+        for btn in row
+    ]
+    assert "daily:remove:0" not in flat
+    assert "daily:remove:1" not in flat
+    assert "daily:removelist" in flat
+
+
+@pytest.mark.asyncio
+async def test_remove_list_opens_with_vertical_crosses(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:removelist")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert "Удаление участников" in edits[0]["text"]
+    kb = edits[0]["reply_markup"]["inline_keyboard"]
+    # one member per row, each cross button carrying its position
+    assert len(kb) == 4
+    for btn in kb[0]:
+        assert btn["text"].startswith("❌")
+        assert btn["callback_data"] == "daily:remove:0"
+    for btn in kb[1]:
+        assert btn["callback_data"] == "daily:remove:1"
+    for btn in kb[2]:
+        assert btn["callback_data"] == "daily:remove:2"
+    assert kb[3][0]["callback_data"] == "daily:team"
+
+
+@pytest.mark.asyncio
+async def test_remove_through_list_stays_in_remove_mode(dp, bot, session, storage):
+    await seed(storage)
+    cb = make_callback(make_message("x"), "daily:remove:1")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    # stays in the dedicated removal list, not back to the team view
+    assert "Удаление участников" in edits[0]["text"]
+    kb = edits[0]["reply_markup"]["inline_keyboard"]
+    assert len(kb) == 3  # 2 remaining members + back button
+    assert kb[0][0]["callback_data"] == "daily:remove:0"
+    assert kb[1][0]["callback_data"] == "daily:remove:1"
+    assert kb[2][0]["callback_data"] == "daily:team"
+
 
 @pytest.mark.asyncio
 async def test_who_callback_edits_in_place(dp, bot, session, storage):
