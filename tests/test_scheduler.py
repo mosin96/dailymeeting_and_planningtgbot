@@ -202,7 +202,7 @@ async def test_loop_seeds_schedule_window(storage):
 
 @pytest.mark.asyncio
 async def test_loop_extends_and_trims_schedule(storage):
-    """Next-day pass appends the new 14th-day leader and trims old rows."""
+    """Next-day pass appends the new 14th-day leader; rows older than 14 days are trimmed."""
     from ppbot.scheduler import reminder_loop
 
     await seed_chat(storage)
@@ -210,15 +210,19 @@ async def test_loop_extends_and_trims_schedule(storage):
     now = datetime.datetime(2026, 8, 3, 9, 45)
     await run_one_iteration(reminder_loop, bot, storage, FakeWorkdays(True), FakeClock([now, now + datetime.timedelta(seconds=35)]))
 
-    # fake two weeks later: schedule reaches today+14 again and 2026-08-03 is trimmed
-    later = datetime.datetime(2026, 8, 17, 9, 45)
+    next_day = datetime.datetime(2026, 8, 4, 9, 45)
     bot2 = FakeBot()
-    await run_one_iteration(reminder_loop, bot2, storage, FakeWorkdays(True), FakeClock([later, later + datetime.timedelta(seconds=35)]))
+    await run_one_iteration(reminder_loop, bot2, storage, FakeWorkdays(True), FakeClock([next_day, next_day + datetime.timedelta(seconds=35)]))
 
     schedule = await storage.get_schedule(1)
-    today = datetime.date(2026, 8, 17)
-    assert str(today + datetime.timedelta(days=14)) in schedule
-    assert "2026-08-03" not in schedule
+    assert "2026-08-18" in schedule
+    assert "2026-08-03" in schedule
+
+    await storage.extend_schedule(1, [("2026-07-01", 0)])
+    bot3 = FakeBot()
+    await run_one_iteration(reminder_loop, bot3, storage, FakeWorkdays(True), FakeClock([next_day, next_day + datetime.timedelta(seconds=35)]))
+    schedule = await storage.get_schedule(1)
+    assert "2026-07-01" not in schedule
 
 
 @pytest.mark.asyncio
