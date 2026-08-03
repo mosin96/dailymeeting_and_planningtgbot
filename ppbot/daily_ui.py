@@ -34,23 +34,27 @@ PREFIX_VACATION = "daily:vac"
 PREFIX_VAC = "daily:vac:"
 
 
-def build_reminder_markup(leader: DailyMember) -> InlineKeyboardMarkup:
+def build_reminder_markup(leader: DailyMember, show_menu: bool = False) -> InlineKeyboardMarkup:
     """Buttons on the 'who leads today' message: substitute and skip.
 
     Payload carries the leader's POSITION (always an int, stable) instead of
     user_id: members added by @username have user_id=None, which would make
     the callback_data lack the trailing digits the handlers' regex requires.
+
+    When `show_menu` is set the markup also gets a jump to the main /daily
+    menu (the scheduled reminder keeps it off, only the /who views enable it).
     """
     sub_data = "{}{}".format(PREFIX_SUB, leader.position)
     skip_data = "{}{}".format(PREFIX_SKIP, leader.position)
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Подмените меня", callback_data=sub_data),
-                InlineKeyboardButton(text="Пропуск", callback_data=skip_data),
-            ]
+    rows = [
+        [
+            InlineKeyboardButton(text="Подмените меня", callback_data=sub_data),
+            InlineKeyboardButton(text="Пропуск", callback_data=skip_data),
         ]
-    )
+    ]
+    if show_menu:
+        rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data=PREFIX_MENU)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_menu_markup() -> InlineKeyboardMarkup:
@@ -193,7 +197,7 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
         )
         if tomorrow_leader is not None:
             text += "\nЗавтра ведёт {}".format(tomorrow_leader.display_name)
-    markup = build_reminder_markup(leader)
+    markup = build_reminder_markup(leader, show_menu=True)
     if edit:
         await message.edit_text(text, reply_markup=markup)
     else:

@@ -213,6 +213,36 @@ async def test_who_shows_vacationers(dp, bot, session, storage):
 
 
 @pytest.mark.asyncio
+async def test_who_has_main_menu_button(dp, bot, session, storage):
+    """who view gets a jump-to-menu button; the scheduled reminder does not."""
+    from ppbot.daily import next_leader
+    from ppbot.daily_ui import build_reminder_markup
+
+    await seed(storage, next_index=0)
+    msg = make_message("/who")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    buttons = [
+        btn["callback_data"]
+        for row in sends[0]["reply_markup"]["inline_keyboard"]
+        for btn in row
+    ]
+    assert "daily:menu" in buttons
+
+    members = await storage.get_members(-1001)
+    leader = next_leader(members, 0, today_str())
+    reminder_markup = build_reminder_markup(leader)
+    reminder_buttons = [
+        btn.callback_data
+        for row in reminder_markup.inline_keyboard
+        for btn in row
+    ]
+    assert "daily:menu" not in reminder_buttons
+
+
+@pytest.mark.asyncio
 async def test_substitute_command(dp, bot, session, storage):
     await seed(storage, next_index=0)
     msg = make_message("/substitute")
