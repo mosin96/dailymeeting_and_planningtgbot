@@ -1,4 +1,4 @@
-# Planning Poker Bot for Telegram
+# Daily Meeting & Planning helper bot for Telegram
 
 This bot allows to play Planning Poker game in group chat and manages daily standup rotations with reminders.
 
