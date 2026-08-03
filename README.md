@@ -3,7 +3,7 @@
 This bot allows to play Planning Poker game in group chat and manages daily standup rotations with reminders.
 
 # Usage
-Add the bot to a group chat. Also you can launch your own instance, see `Self-hosted usage` below.
+You can launch your own instance, see `Self-hosted usage` below.
 
 ## Planning poker
 ```
@@ -64,7 +64,7 @@ You need to obtain your own bot token from https://t.me/BotFather, then run
 PP_BOT_TOKEN=11111424242:some-token ./run.sh
 ```
 
-It will recreate the image and container `ppbot`. The bot uses a sqlite database at host in `~/.ppbot/tg_pp_bot.db`.
+It will recreate the image and container `ppbot`. The bot uses a sqlite database at host in `~/.ppbot/tg_pp_bot.db` (default).
 
 ## Environment variables
 | Variable | Required | Default | Description |
