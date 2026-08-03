@@ -1,11 +1,20 @@
 """Daily standup UI helpers: markup builders, /daily status, /team list, /who reply, help text."""
 from __future__ import annotations
 
+import datetime
 from typing import List
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from ppbot.daily import DailyChat, DailyMember, member_list_text, today_in_tz, today_leader
+from ppbot.daily import (
+    DailyChat,
+    DailyMember,
+    format_ru_date,
+    member_list_text,
+    next_leader,
+    today_in_tz,
+    today_leader,
+)
 from ppbot.daily_storage import DailyRegistry
 
 PREFIX_SUB = "daily:sub:"
@@ -153,10 +162,11 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
     chat_id = message.chat.id
     chat = await daily.get_chat(chat_id)
     members = await daily.get_members(chat_id)
-    today = str(today_in_tz(tz))
+    today = today_in_tz(tz)
+    today_s = str(today)
     if chat is None:
         chat = DailyChat(chat_id=chat_id)
-    leader = today_leader(members, chat.next_index, today)
+    leader = today_leader(members, chat.next_index, today_s)
     if leader is None:
         if not members:
             text = "Команда пуста. Добавьте участников через /team"
@@ -167,7 +177,22 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
         else:
             await message.answer(text)
         return
+
     text = "Сегодня ведёт {}".format(leader.display_name)
+    vacationers = [m for m in members if m.is_on_vacation(today_s)]
+    if vacationers:
+        parts = ", ".join(
+            "{} (до {})".format(m.plain_name, format_ru_date(m.vacation_until))
+            for m in vacationers
+        )
+        text += "\nВ отпуске: {}".format(parts)
+    if members:
+        tomorrow_s = str(today + datetime.timedelta(days=1))
+        tomorrow_leader = next_leader(
+            members, (leader.position + 1) % len(members), tomorrow_s
+        )
+        if tomorrow_leader is not None:
+            text += "\nЗавтра ведёт {}".format(tomorrow_leader.display_name)
     markup = build_reminder_markup(leader)
     if edit:
         await message.edit_text(text, reply_markup=markup)

@@ -181,6 +181,38 @@ async def test_who_command_shows_leader_with_buttons(dp, bot, session, storage):
 
 
 @pytest.mark.asyncio
+async def test_who_shows_tomorrow_leader(dp, bot, session, storage):
+    await seed(storage, next_index=0)
+    msg = make_message("/who")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    assert "Сегодня ведёт @a" in sends[0]["text"]
+    assert "Завтра ведёт @b" in sends[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_who_shows_vacationers(dp, bot, session, storage):
+    """who output syncs with the scheduler reminder: vacationers listed by
+    plain name (no @), and tomorrow's leader skips the vacationer."""
+    await seed(storage, next_index=0)
+    await storage.update_member_vacation(
+        -1001, 1, (datetime.datetime.now(TZ) + datetime.timedelta(days=5)).strftime("%Y-%m-%d")
+    )
+    msg = make_message("/who")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    text = sends[0]["text"]
+    assert "Сегодня ведёт @a" in text
+    assert "В отпуске: B" in text
+    assert "@b" not in text
+    assert "Завтра ведёт @c" in text
+
+
+@pytest.mark.asyncio
 async def test_substitute_command(dp, bot, session, storage):
     await seed(storage, next_index=0)
     msg = make_message("/substitute")
