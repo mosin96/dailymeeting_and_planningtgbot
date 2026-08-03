@@ -1,7 +1,9 @@
 """Scheduler tests: decision functions + loop integration with fake time.
 
-Model under test: 23:59-advance rotation, a leader tag 15 minutes before the
-daily, and a "daily starts now" message at the daily time.
+Model under test: a precomputed 14-day leader schedule (daily_schedule
+table). The loop seeds/extends the window covering today..today+14, trims
+rows older than 14 days, a leader tag 15 minutes before the daily, and a
+"daily starts now" message at the daily time.
 """
 import asyncio
 import datetime
@@ -12,8 +14,6 @@ import pytest
 from ppbot.daily import DailyChat, DailyMember
 from ppbot.daily_storage import DailyRegistry
 from ppbot.scheduler import (
-    missing_advances,
-    should_advance_index,
     should_send_reminder,
     should_send_start,
 )
@@ -78,46 +78,12 @@ class TestShouldSendStart:
         assert should_send_start(c, datetime.datetime(2026, 8, 3, 10, 0), MONDAY, True) is False
 
 
-class TestShouldAdvance:
-    def test_before_2359_false(self):
-        assert should_advance_index(chat(), datetime.datetime(2026, 8, 3, 23, 58), MONDAY, True) is False
-
-    def test_at_2359_true(self):
-        assert should_advance_index(chat(), datetime.datetime(2026, 8, 3, 23, 59), MONDAY, True) is True
-
-    def test_weekend_false(self):
-        assert should_advance_index(chat(), datetime.datetime(2026, 8, 3, 23, 59), MONDAY, False) is False
-
-    def test_already_advanced_false(self):
-        c = chat(last_advance_date="2026-08-03")
-        assert should_advance_index(c, datetime.datetime(2026, 8, 3, 23, 59), MONDAY, True) is False
-
-
 class FakeCalendar:
     def __init__(self, predicate):
         self._predicate = predicate
 
     async def is_workday(self, date):
         return self._predicate(date)
-
-
-@pytest.mark.asyncio
-async def test_missing_advances_counts_only_workdays():
-    # last advance Thu 07-30; today Mon 08-03; Fri 07-31 is the only workday between
-    cal = FakeCalendar(lambda d: d.weekday() < 5)
-    assert await missing_advances(cal, "2026-07-30", datetime.date(2026, 8, 3)) == 1
-
-
-@pytest.mark.asyncio
-async def test_missing_advances_no_gap():
-    cal = FakeCalendar(lambda d: d.weekday() < 5)
-    assert await missing_advances(cal, "2026-08-02", datetime.date(2026, 8, 3)) == 0
-
-
-@pytest.mark.asyncio
-async def test_missing_advances_none_returns_zero():
-    cal = FakeCalendar(lambda d: d.weekday() < 5)
-    assert await missing_advances(cal, None, datetime.date(2026, 8, 3)) == 0
 
 
 class FakeBot:
@@ -213,18 +179,46 @@ async def test_loop_sends_start_message_at_daily_time(storage):
 
 
 @pytest.mark.asyncio
-async def test_loop_advances_only_at_2359(storage):
+async def test_loop_seeds_schedule_window(storage):
+    """First loop pass seeds the daily_schedule covering today..today+14."""
     from ppbot.scheduler import reminder_loop
 
     await seed_chat(storage)
     bot = FakeBot()
-    now = datetime.datetime(2026, 8, 3, 23, 59)
+    now = datetime.datetime(2026, 8, 3, 9, 45)
     await run_one_iteration(reminder_loop, bot, storage, FakeWorkdays(True), FakeClock([now, now + datetime.timedelta(seconds=35)]))
 
-    assert bot.sent == []
+    assert len(bot.sent) == 1
+    schedule = await storage.get_schedule(1)
+    today = datetime.date(2026, 8, 3)
+    assert len(schedule) == 15  # today + 14 days
+    for i in range(15):
+        assert str(today + datetime.timedelta(days=i)) in schedule
+    assert schedule["2026-08-03"] == 0
+    assert schedule["2026-08-04"] == 1
     chat = await storage.get_chat(1)
-    assert chat.next_index == 1  # rotation advanced past U0 -> U1 leads next
-    assert chat.last_advance_date == "2026-08-03"
+    assert chat.next_index == 0
+
+
+@pytest.mark.asyncio
+async def test_loop_extends_and_trims_schedule(storage):
+    """Next-day pass appends the new 14th-day leader and trims old rows."""
+    from ppbot.scheduler import reminder_loop
+
+    await seed_chat(storage)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 3, 9, 45)
+    await run_one_iteration(reminder_loop, bot, storage, FakeWorkdays(True), FakeClock([now, now + datetime.timedelta(seconds=35)]))
+
+    # fake two weeks later: schedule reaches today+14 again and 2026-08-03 is trimmed
+    later = datetime.datetime(2026, 8, 17, 9, 45)
+    bot2 = FakeBot()
+    await run_one_iteration(reminder_loop, bot2, storage, FakeWorkdays(True), FakeClock([later, later + datetime.timedelta(seconds=35)]))
+
+    schedule = await storage.get_schedule(1)
+    today = datetime.date(2026, 8, 17)
+    assert str(today + datetime.timedelta(days=14)) in schedule
+    assert "2026-08-03" not in schedule
 
 
 @pytest.mark.asyncio
@@ -240,7 +234,6 @@ async def test_loop_skips_weekend(storage):
     chat = await storage.get_chat(1)
     assert chat.last_reminder_date is None
     assert chat.last_start_date is None
-    assert chat.last_advance_date is None
 
 
 @pytest.mark.asyncio
@@ -258,24 +251,25 @@ async def test_loop_all_skipped_sends_cancelled_message(storage):
     chat = await storage.get_chat(1)
     assert chat.last_reminder_date == "2026-08-03"
     assert chat.next_index == 0
+    schedule = await storage.get_schedule(1)
+    assert schedule["2026-08-03"] is None
 
 
 @pytest.mark.asyncio
-async def test_loop_catches_up_missed_advances(storage):
+async def test_loop_rebuilds_schedule_from_next_index(storage):
+    """Stale/missing schedule (e.g. after downtime) is rebuilt from next_index,
+    so the seeded leader matches the rotation pointer."""
     from ppbot.scheduler import reminder_loop
 
-    # bot was down for Thursday's 23:59 pass -> Friday's advance was missed
-    await seed_chat(storage, next_index=0, last_advance_date="2026-07-30")
+    await seed_chat(storage, next_index=2)
     bot = FakeBot()
     now = datetime.datetime(2026, 8, 3, 9, 45)
-    calendar = FakeCalendar(lambda d: d.weekday() < 5)
-    await run_one_iteration(reminder_loop, bot, storage, calendar, FakeClock([now, now + datetime.timedelta(seconds=35)]))
+    await run_one_iteration(reminder_loop, bot, storage, FakeWorkdays(True), FakeClock([now, now + datetime.timedelta(seconds=35)]))
 
     assert len(bot.sent) == 1
-    assert "Сегодня ведущий - @u1" in bot.sent[0]["text"]  # one missed advance -> U1 leads
+    assert "Сегодня ведущий - @u2" in bot.sent[0]["text"]
     chat = await storage.get_chat(1)
-    assert chat.next_index == 1
-    assert chat.last_catchup_date == "2026-08-03"
+    assert chat.next_index == 2
 
 
 @pytest.mark.asyncio

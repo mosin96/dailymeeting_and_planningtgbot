@@ -1,7 +1,10 @@
 """Reminder scheduler: asyncio loop that runs the daily standup events.
 
-Model: next_index points AT the current day's leader. A nightly pass at 23:59
-advances the rotation (once per workday). Per workday two messages go out:
+Model: a permanently stored 14-day leader schedule (daily_schedule table)
+pre-computes who leads which date by walking the rotation circle and skipping
+vacation/skip per date. Each loop keeps the window covering today..today+14:
+adds the new 14th-day leader and trims leaders older than 14 days. Per
+workday two messages go out:
   1. 15 minutes before the daily: tag the leader ("Сегодня ведущий - @nick");
   2. at the daily time: announce the daily has started.
 """
@@ -16,10 +19,10 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 
 from ppbot.daily import (
+    SCHEDULE_DAYS,
     DailyChat,
-    advance_next,
+    build_schedule,
     format_ru_date,
-    next_leader,
     today_in_tz,
 )
 from ppbot.daily_storage import DailyRegistry
@@ -28,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 REMIND_BEFORE_MINUTES = 15
 START_GRACE_MINUTES = 60
-META_ADVANCE_V2 = "daily_advance_v2"
+META_SCHEDULE_V1 = "daily_schedule_v1"
 
 START_TEXT = "Дейлик начинается, всех ждем!"
 
@@ -67,43 +70,56 @@ def should_send_start(chat: DailyChat, now: datetime.datetime, today: datetime.d
     return daily_dt <= now < daily_dt + datetime.timedelta(minutes=START_GRACE_MINUTES)
 
 
-def should_advance_index(chat: DailyChat, now: datetime.datetime, today: datetime.date, is_workday: bool) -> bool:
-    """True when the 23:59 rotation advance is due for this chat today."""
-    if not is_workday or chat.last_advance_date == str(today):
-        return False
-    return now >= datetime.datetime.combine(today, datetime.time(23, 59))
+async def _ensure_schedule(
+    storage: DailyRegistry,
+    chat: DailyChat,
+    members,
+    today: datetime.date,
+) -> None:
+    """Guarantee the daily_schedule window covers today..today+14.
+
+    If the schedule is missing or stale (today absent), rebuild the full
+    window from today with `chat.next_index` as the seed. Otherwise extend
+    the tail one day at a time (the new 14th-day leader, continuing the
+    rotation after the last scheduled position) and trim rows dated more
+    than 14 days ago.
+    """
+    today_s = str(today)
+    schedule = await storage.get_schedule(chat.chat_id)
+    if not schedule or today_s not in schedule:
+        rows = build_schedule(members, today, chat.next_index, SCHEDULE_DAYS + 1)
+        await storage.set_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
+        return
+
+    target = today + datetime.timedelta(days=SCHEDULE_DAYS)
+    target_s = str(target)
+    if target_s not in schedule:
+        last_date = max(schedule)
+        last_pos = schedule[last_date]
+        n = len(members)
+        if n == 0:
+            cursor = 0
+        elif last_pos is None:
+            cursor = chat.next_index % n
+        else:
+            cursor = (last_pos + 1) % n
+        start = datetime.date.fromisoformat(last_date) + datetime.timedelta(days=1)
+        days = (target - start).days + 1
+        rows = build_schedule(members, start, cursor, days)
+        await storage.extend_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
+
+    earliest = today - datetime.timedelta(days=SCHEDULE_DAYS)
+    await storage.trim_schedule(chat.chat_id, str(earliest))
 
 
-async def missing_advances(workday_client, last_advance_date: Optional[str], today: datetime.date) -> int:
-    """Workdays strictly between last_advance_date and today (missed 23:59 passes)."""
-    if last_advance_date is None:
-        return 0
-    start = datetime.date.fromisoformat(last_advance_date)
-    count = 0
-    d = start + datetime.timedelta(days=1)
-    guard = 0
-    while d < today and guard < 400:
-        if await workday_client.is_workday(d):
-            count += 1
-        d += datetime.timedelta(days=1)
-        guard += 1
-    return count
-
-
-async def _process_chat(bot: Bot, storage: DailyRegistry, workday_client, chat: DailyChat, now: datetime.datetime, today: datetime.date, is_workday: bool):
+async def _process_chat(bot: Bot, storage: DailyRegistry, chat: DailyChat, now: datetime.datetime, today: datetime.date, is_workday: bool):
     today_s = str(today)
 
-    if chat.last_catchup_date != today_s:
-        missing = await missing_advances(workday_client, chat.last_advance_date, today)
-        if missing:
-            members = await storage.get_members(chat.chat_id)
-            if members:
-                chat.next_index = (chat.next_index + missing) % len(members)
-        chat.last_catchup_date = today_s
-        await storage.upsert_chat(chat)
-
     members = await storage.get_members(chat.chat_id)
-    leader = next_leader(members, chat.next_index, today_s)
+    await _ensure_schedule(storage, chat, members, today)
+    schedule = await storage.get_schedule(chat.chat_id)
+    position = schedule.get(today_s)
+    leader = next((m for m in members if m.position == position), None) if position is not None else None
 
     if should_send_reminder(chat, now, today, is_workday):
         try:
@@ -129,12 +145,6 @@ async def _process_chat(bot: Bot, storage: DailyRegistry, workday_client, chat: 
         except TelegramBadRequest as exc:
             logger.warning("chat %s unavailable: %s", chat.chat_id, exc)
         chat.last_start_date = today_s
-        await storage.upsert_chat(chat)
-
-    if should_advance_index(chat, now, today, is_workday):
-        if leader is not None:
-            chat.next_index = advance_next(members, leader.position)
-        chat.last_advance_date = today_s
         await storage.upsert_chat(chat)
 
 
@@ -167,7 +177,7 @@ async def reminder_loop(
             is_workday = await workday_client.is_workday(today)
             for chat in await storage.list_chats():
                 try:
-                    await _process_chat(bot, storage, workday_client, chat, current, today, is_workday)
+                    await _process_chat(bot, storage, chat, current, today, is_workday)
                 except Exception:
                     logger.exception("chat %s processing failed", chat.chat_id)
         except Exception:
@@ -175,27 +185,20 @@ async def reminder_loop(
         await asyncio.sleep(interval)
 
 
-async def migrate_advance_semantics(daily: DailyRegistry, tz) -> None:
-    """One-time migration to the 23:59-advance model (idempotent via daily_meta).
+async def migrate_schedule_model(daily: DailyRegistry, tz) -> None:
+    """One-time seeding of the 14-day leader schedule (idempotent via daily_meta).
 
-    Old chats have next_index in the post-reminder semantics: once today's
-    reminder had fired, next_index pointed PAST today's leader. Step such
-    chats back to today's leader; the next 23:59 pass converges them to the
-    new model. last_advance_date = yesterday marks a chat as migrated while
-    still allowing tonight's advance.
+    Old chats carry only next_index (pointing at today's leader). Seed a fresh
+    daily_schedule window from today so the schedule table becomes the source
+    of truth; afterwards the scheduler only extends/trims it.
     """
-    if await daily.get_meta(META_ADVANCE_V2) is not None:
+    if await daily.get_meta(META_SCHEDULE_V1) is not None:
         return
     today = today_in_tz(tz)
-    yesterday = today - datetime.timedelta(days=1)
     for chat in await daily.list_chats():
-        if chat.last_advance_date is not None:
+        members = await daily.get_members(chat.chat_id)
+        if not members:
             continue
-        if chat.last_reminder_date == str(today):
-            members = await daily.get_members(chat.chat_id)
-            if members:
-                chat.next_index = (chat.next_index - 1) % len(members)
-        chat.last_advance_date = str(yesterday)
-        chat.last_catchup_date = str(yesterday)
-        await daily.upsert_chat(chat)
-    await daily.set_meta(META_ADVANCE_V2, str(today))
+        rows = build_schedule(members, today, chat.next_index, SCHEDULE_DAYS + 1)
+        await daily.set_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
+    await daily.set_meta(META_SCHEDULE_V1, str(today))

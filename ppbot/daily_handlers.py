@@ -89,6 +89,15 @@ def _resolve_member(members: List[DailyMember], text: str) -> Optional[DailyMemb
     return None
 
 
+async def _refresh_schedule(daily: DailyRegistry, chat_id: int, tz) -> None:
+    """Recompute the persisted 14-day leader window after a roster change."""
+    chat = await daily.get_chat(chat_id)
+    if chat is None:
+        return
+    members = await daily.get_members(chat_id)
+    await daily.rebuild_schedule(chat_id, chat.next_index, members, today_in_tz(tz))
+
+
 def create_router() -> Router:
     r = Router(name="daily")
 
@@ -118,18 +127,19 @@ def create_router() -> Router:
         await callback.answer()
 
     @r.callback_query(F.data.regexp(r"^{}(.+)$".format(PREFIX_REMOVE)))
-    async def remove_member_callback(callback: CallbackQuery, daily: DailyRegistry):
+    async def remove_member_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
         position = int(callback.data[len(PREFIX_REMOVE):])
         await daily.remove_member(callback.message.chat.id, position)
         chat = await daily.get_chat(callback.message.chat.id)
         if chat is None:
             chat = DailyChat(chat_id=callback.message.chat.id)
             await daily.upsert_chat(chat)
+        await _refresh_schedule(daily, callback.message.chat.id, tz)
         await show_remove_list(callback.message, daily, edit=True)
         await callback.answer()
 
     @r.message(AddMember.waiting)
-    async def add_member_input(message: Message, state: FSMContext, daily: DailyRegistry):
+    async def add_member_input(message: Message, state: FSMContext, daily: DailyRegistry, tz):
         chat_id = message.chat.id
         members = await daily.get_members(chat_id)
         new_member = None
@@ -169,6 +179,7 @@ def create_router() -> Router:
         if chat is None:
             chat = DailyChat(chat_id=chat_id)
             await daily.upsert_chat(chat)
+        await _refresh_schedule(daily, chat_id, tz)
         await state.clear()
         await show_team(message, daily)
 
@@ -226,6 +237,7 @@ def create_router() -> Router:
         await daily.replace_members(message.chat.id, new_members)
         chat.next_index = new_next
         await daily.upsert_chat(chat)
+        await _refresh_schedule(daily, message.chat.id, tz)
         await message.answer(msg or "Подмена выполнена")
 
     @r.callback_query(F.data.regexp(r"^{}(\d+)$".format(PREFIX_SUB)))
@@ -241,6 +253,7 @@ def create_router() -> Router:
         await daily.replace_members(callback.message.chat.id, new_members)
         chat.next_index = new_next
         await daily.upsert_chat(chat)
+        await _refresh_schedule(daily, callback.message.chat.id, tz)
         await callback.message.edit_text(msg)
         await callback.answer()
 
@@ -257,6 +270,7 @@ def create_router() -> Router:
         await daily.replace_members(callback.message.chat.id, new_members)
         chat.next_index = new_next
         await daily.upsert_chat(chat)
+        await _refresh_schedule(daily, callback.message.chat.id, tz)
         if new_leader is None:
             await callback.message.edit_text("Все пропущены сегодня, дейлик отменён")
         else:
@@ -322,6 +336,7 @@ def create_router() -> Router:
             return
         chat.next_index = new_next
         await daily.upsert_chat(chat)
+        await _refresh_schedule(daily, callback.message.chat.id, tz)
         chosen = next((m for m in members if m.position == position), None)
         await callback.message.edit_text(
             "Сегодня ведёт {}".format(chosen.display_name if chosen else "")
@@ -356,6 +371,7 @@ def create_router() -> Router:
             return
         chat.next_index = new_next
         await daily.upsert_chat(chat)
+        await _refresh_schedule(daily, message.chat.id, tz)
         await message.answer("Сегодня ведёт {}".format(member.display_name))
 
     # ---- vacation ----
@@ -382,7 +398,7 @@ def create_router() -> Router:
         await callback.answer()
 
     @r.message(Command("vacation"))
-    async def vacation_command(message: Message, state: FSMContext, daily: DailyRegistry):
+    async def vacation_command(message: Message, state: FSMContext, daily: DailyRegistry, tz):
         members = await daily.get_members(message.chat.id)
         if not members:
             await message.answer("Команда пуста. Добавьте участников через /team")
@@ -408,6 +424,7 @@ def create_router() -> Router:
             return
         if date_part in ("снять", "нет", "0"):
             await daily.update_member_vacation(message.chat.id, member.position, None)
+            await _refresh_schedule(daily, message.chat.id, tz)
             await message.answer("{} вернулся в ротацию".format(member.display_name))
             return
         if date_part:
@@ -416,6 +433,7 @@ def create_router() -> Router:
                 await message.answer("Неверный формат даты. Пришлите ДД.ММ.ГГГГ")
                 return
             await daily.update_member_vacation(message.chat.id, member.position, iso)
+            await _refresh_schedule(daily, message.chat.id, tz)
             await message.answer(
                 "{} в отпуске до {}".format(member.display_name, format_ru_date(iso))
             )
@@ -425,7 +443,7 @@ def create_router() -> Router:
         await message.answer("До какой даты отпуск? (ДД.ММ.ГГГГ, «снять» — убрать)")
 
     @r.message(SetVacation.waiting)
-    async def vacation_input(message: Message, state: FSMContext, daily: DailyRegistry):
+    async def vacation_input(message: Message, state: FSMContext, daily: DailyRegistry, tz):
         text = (message.text or "").strip()
         data = await state.get_data()
         position = data.get("vacation_position")
@@ -437,6 +455,7 @@ def create_router() -> Router:
             return
         if text in ("снять", "нет", "0"):
             await daily.update_member_vacation(message.chat.id, member.position, None)
+            await _refresh_schedule(daily, message.chat.id, tz)
             await message.answer("{} вернулся в ротацию".format(member.display_name))
             await state.clear()
             return
@@ -445,6 +464,7 @@ def create_router() -> Router:
             await message.answer("Неверный формат даты. Пришлите ДД.ММ.ГГГГ или «снять»")
             return
         await daily.update_member_vacation(message.chat.id, member.position, iso)
+        await _refresh_schedule(daily, message.chat.id, tz)
         await message.answer(
             "{} в отпуске до {}".format(member.display_name, format_ru_date(iso))
         )

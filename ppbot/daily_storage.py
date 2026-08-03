@@ -1,11 +1,11 @@
 """Daily standup storage: DailyRegistry on aiosqlite."""
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import aiosqlite
 
-from ppbot.daily import DailyChat, DailyMember
+from ppbot.daily import DailyChat, DailyMember, SCHEDULE_DAYS, build_schedule
 
 
 class DailyRegistry:
@@ -44,6 +44,14 @@ class DailyRegistry:
             CREATE TABLE IF NOT EXISTS daily_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT
+            )
+        """)
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_schedule (
+                chat_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                position INTEGER,
+                PRIMARY KEY (chat_id, date)
             )
         """)
         # migrate older DBs: add the scheduler-state columns if missing
@@ -148,8 +156,6 @@ class DailyRegistry:
             for r in rows
         ]
 
-    # ---- members ----
-
     async def get_members(self, chat_id: int) -> List[DailyMember]:
         query = (
             "SELECT chat_id, position, user_id, username, first_name, skip_date, vacation_until "
@@ -233,9 +239,64 @@ class DailyRegistry:
         await self._db.commit()
 
     async def delete_chat(self, chat_id: int):
-        """Reset all daily data for a chat: config, rotation state, members."""
+        """Reset all daily data for a chat: config, rotation state, members, schedule."""
         await self._db.execute("DELETE FROM daily_chats WHERE chat_id = ?", (chat_id,))
         await self._db.execute("DELETE FROM daily_members WHERE chat_id = ?", (chat_id,))
+        await self._db.execute("DELETE FROM daily_schedule WHERE chat_id = ?", (chat_id,))
+        await self._db.commit()
+
+    # ---- leader schedule ----
+
+    async def get_schedule(self, chat_id: int) -> Dict[str, Optional[int]]:
+        """Return {date: position} for the chat's precomputed leader window."""
+        query = "SELECT date, position FROM daily_schedule WHERE chat_id = ?"
+        async with self._db.execute(query, (chat_id,)) as cursor:
+            rows = await cursor.fetchall()
+        return {d: pos for d, pos in rows}
+
+    async def set_schedule(self, chat_id: int, rows: List[tuple]):
+        """Replace the whole precomputed leader window for a chat.
+
+        `rows` is an iterable of (date, position) where position may be None
+        (no available leader that day).
+        """
+        async with self._db.execute("BEGIN"):
+            await self._db.execute("DELETE FROM daily_schedule WHERE chat_id = ?", (chat_id,))
+            await self._db.executemany(
+                "INSERT INTO daily_schedule (chat_id, date, position) VALUES (?, ?, ?)",
+                [(chat_id, d, pos) for d, pos in rows],
+            )
+        await self._db.commit()
+
+    async def rebuild_schedule(self, chat_id: int, next_index: int, members: List[DailyMember], today) -> None:
+        """Rebuild the 14-day leader window starting from `today`.
+
+        Called after a roster/rotation change (add/remove/substitute/skip/
+        manual leader/vacation) so the persisted schedule reflects the updated
+        rotation and availability.
+        """
+        rows = build_schedule(members, today, next_index, SCHEDULE_DAYS + 1)
+        await self.set_schedule(chat_id, [(d.isoformat(), p) for d, p in rows])
+
+    async def extend_schedule(self, chat_id: int, rows: List[tuple]):
+        """Append new (date, position) rows and drop rows older than the
+        retained 14-day window for a chat."""
+        if not rows:
+            return
+        async with self._db.execute("BEGIN"):
+            await self._db.executemany(
+                "INSERT INTO daily_schedule (chat_id, date, position) VALUES (?, ?, ?) "
+                "ON CONFLICT(chat_id, date) DO UPDATE SET position = excluded.position",
+                [(chat_id, d, pos) for d, pos in rows],
+            )
+        await self._db.commit()
+
+    async def trim_schedule(self, chat_id: int, earliest: str):
+        """Delete schedule rows dated before `earliest` (ISO, exclusive)."""
+        await self._db.execute(
+            "DELETE FROM daily_schedule WHERE chat_id = ? AND date < ?",
+            (chat_id, earliest),
+        )
         await self._db.commit()
 
     async def close(self):

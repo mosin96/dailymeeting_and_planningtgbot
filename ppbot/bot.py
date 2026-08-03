@@ -86,14 +86,14 @@ def main():
     async def _start():
         import aiohttp
 
-        from ppbot.scheduler import migrate_advance_semantics, reminder_loop
+        from ppbot.scheduler import migrate_schedule_model, reminder_loop
         from ppbot.workdays import WorkdayClient
 
         http_session = aiohttp.ClientSession()
         workdays = WorkdayClient(session=http_session)
         await storage.init_db(DB_PATH)
         await daily.init_db(DB_PATH)
-        await migrate_advance_semantics(daily, TZ)
+        await migrate_schedule_model(daily, TZ)
         await bot.set_my_commands(
             [BotCommand(command=cmd, description=desc) for cmd, desc in COMMANDS]
         )

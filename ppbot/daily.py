@@ -1,6 +1,7 @@
 """Daily standup team model and pure rotation logic (no DB, no aiogram)."""
 from __future__ import annotations
 
+import datetime
 import re
 from dataclasses import dataclass
 from html import escape
@@ -8,6 +9,8 @@ from typing import List, Optional, Tuple
 
 VACATION_DATE_RE = re.compile(r"(\d{1,2})[./](\d{1,2})[./](\d{4})")
 ISO_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+
+SCHEDULE_DAYS = 14
 
 
 @dataclass
@@ -153,6 +156,39 @@ def advance_next(members: List[DailyMember], leader_pos: int) -> int:
     if not members:
         return 0
     return (leader_pos + 1) % len(members)
+
+
+def build_schedule(
+    members: List[DailyMember],
+    start_date: "datetime.date",
+    start_pos: int,
+    days: int = SCHEDULE_DAYS,
+) -> List[Tuple["datetime.date", Optional[int]]]:
+    """Precompute a rolling leader plan for `days` consecutive days.
+
+    Walks the rotation circle from `start_pos`, one step per day,
+    skipping members that are unavailable on that specific date (vacation
+    end-date or skip_date). A day where nobody is available yields a
+    (date, None) row so callers can announce "the daily is cancelled".
+
+    Returns a list of (date, position) in chronological order; the position
+    is stable (0..n-1) even for members added by @username (user_id=None).
+    """
+    if not members:
+        return [(start_date + datetime.timedelta(days=i), None) for i in range(days)]
+    n = len(members)
+    cursor = start_pos % n
+    rows = []
+    for i in range(days):
+        day = start_date + datetime.timedelta(days=i)
+        day_s = day.isoformat()
+        leader = _next_non_skipped(members, cursor, day_s)
+        if leader is None:
+            rows.append((day, None))
+        else:
+            rows.append((day, leader.position))
+            cursor = (leader.position + 1) % n
+    return rows
 
 
 def set_leader(
