@@ -778,3 +778,59 @@ async def test_who_callback_edits_in_place(dp, bot, session, storage):
     assert len(edits) == 1
     assert "Сегодня ведёт @a" in edits[0]["text"]
     assert not [p for m, p in session.calls if m == "sendMessage"]
+
+
+# ---- reset history ----
+
+@pytest.fixture
+async def game_storage(tmp_path):
+    from ppbot.game import GameRegistry
+
+    db = tmp_path / "game.db"
+    r = GameRegistry()
+    await r.init_db(str(db))
+    yield r
+    await r._db.close()
+
+
+@pytest.mark.asyncio
+async def test_reset_requires_double_confirmation(dp, bot, session, storage, game_storage):
+    await seed(storage)
+    await dp.feed_update(
+        bot,
+        Update(update_id=1, message=make_message("/reset")),
+        daily=storage,
+        storage=game_storage,
+        tz=TZ,
+    )
+
+    answers = [p for m, p in session.calls if m == "sendMessage"]
+    assert any("сбросит историю бота" in (a.get("text") or "") for a in answers)
+    assert not any("сброшена" in (a.get("text") or "") for a in answers)
+    members = await storage.get_members(-1001)
+    assert len(members) == 3  # nothing deleted yet
+
+
+@pytest.mark.asyncio
+async def test_reset_executes_on_second_command(dp, bot, session, storage, game_storage):
+    await seed(storage)
+    from ppbot.game import Game as GameModel
+
+    await game_storage.save_game(
+        GameModel(chat_id=-1001, vote_id="100", initiator={"id": 1, "first_name": "A"}, text="task")
+    )
+
+    for update_id in (1, 2):
+        await dp.feed_update(
+            bot,
+            Update(update_id=update_id, message=make_message("/reset", message_id=100 + update_id)),
+            daily=storage,
+            storage=game_storage,
+            tz=TZ,
+        )
+
+    answers = [p for m, p in session.calls if m == "sendMessage"]
+    assert any("сброшена" in (a.get("text") or "") for a in answers)
+    assert await storage.get_members(-1001) == []
+    assert await storage.get_chat(-1001) is None
+    assert await game_storage.get_game(-1001, "100") is None

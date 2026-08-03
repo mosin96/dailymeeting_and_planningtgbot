@@ -232,6 +232,12 @@ class DailyRegistry:
         )
         await self._db.commit()
 
+    async def delete_chat(self, chat_id: int):
+        """Reset all daily data for a chat: config, rotation state, members."""
+        await self._db.execute("DELETE FROM daily_chats WHERE chat_id = ?", (chat_id,))
+        await self._db.execute("DELETE FROM daily_members WHERE chat_id = ?", (chat_id,))
+        await self._db.commit()
+
     async def close(self):
         if self._db is not None:
             await self._db.close()

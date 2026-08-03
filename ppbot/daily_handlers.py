@@ -22,6 +22,7 @@ from ppbot.daily import (
     today_leader,
 )
 from ppbot.daily_storage import DailyRegistry
+from ppbot.game import GameRegistry
 from ppbot.daily_ui import (
     GREETING_HELP,
     PREFIX_ADD,
@@ -58,6 +59,10 @@ class SetTime(StatesGroup):
 
 class SetVacation(StatesGroup):
     waiting = State()
+
+
+class ResetChat(StatesGroup):
+    confirm = State()
 
 
 def _member_from_user(user: User) -> DailyMember:
@@ -264,6 +269,21 @@ def create_router() -> Router:
     async def help_callback(callback: CallbackQuery):
         await callback.message.edit_text(GREETING_HELP)
         await callback.answer()
+
+    @r.message(Command("reset"))
+    async def reset_command(message: Message, state: FSMContext, daily: DailyRegistry, storage: GameRegistry):
+        if await state.get_state() == ResetChat.confirm.state:
+            await daily.delete_chat(message.chat.id)
+            await storage.delete_chat_games(message.chat.id)
+            await state.clear()
+            await message.answer("История бота для этого чата сброшена")
+            return
+        await state.set_state(ResetChat.confirm)
+        await message.answer(
+            "🥲 Это сбросит историю бота для этого чата: состав команды, "
+            "настройки дейлика и покер-голосования.\n"
+            "Отправьте /reset ещё раз для подтверждения."
+        )
 
     @r.message(Command("help"))
     async def help_command(message: Message):

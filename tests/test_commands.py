@@ -21,10 +21,10 @@ def test_greeting_contains_all_commands():
         assert "/{}".format(cmd) in bot_module.GREETING
 
 
-def test_commands_are_10_unique():
+def test_commands_are_11_unique():
     cmds = [cmd for cmd, _ in bot_module.COMMANDS]
-    assert len(cmds) == 10
-    assert len(set(cmds)) == 10
+    assert len(cmds) == 11
+    assert len(set(cmds)) == 11
 
 
 @pytest.mark.asyncio

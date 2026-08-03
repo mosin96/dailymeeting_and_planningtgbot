@@ -202,3 +202,8 @@ class GameRegistry:
             (game.chat_id, game.vote_id, json.dumps(game.to_dict()))
         )
         await self._db.commit()
+
+    async def delete_chat_games(self, chat_id):
+        """Drop every game/vote associated with the given chat."""
+        await self._db.execute("DELETE FROM games WHERE chat_id = ?", (chat_id,))
+        await self._db.commit()
