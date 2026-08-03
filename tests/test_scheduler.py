@@ -5,6 +5,7 @@ daily, and a "daily starts now" message at the daily time.
 """
 import asyncio
 import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -322,3 +323,60 @@ async def test_loop_leader_skips_vacationer_in_tag(storage):
     assert len(bot.sent) == 1
     assert "Сегодня ведущий - @u1" in bot.sent[0]["text"]
     assert "@u0" not in bot.sent[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_loop_tags_leader_aware_clock(storage):
+    """Regression: production clock is tz-aware; the loop must still fire the
+    reminder (previously the aware-vs-naive comparison raised TypeError that
+    the broad except swallowed, so nothing was sent)."""
+    from ppbot.scheduler import reminder_loop
+
+    await seed_chat(storage)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 3, 9, 45, tzinfo=ZoneInfo("UTC"))
+    await run_one_iteration(
+        reminder_loop, bot, storage, FakeWorkdays(True),
+        FakeClock([now, now + datetime.timedelta(seconds=35)]),
+    )
+
+    assert len(bot.sent) == 1
+    assert "Сегодня ведущий - @u0" in bot.sent[0]["text"]
+    chat = await storage.get_chat(1)
+    assert chat.last_reminder_date == "2026-08-03"
+
+
+@pytest.mark.asyncio
+async def test_manual_setleader_does_not_cancel_scheduler(storage):
+    """A manual leader override (writes next_index) must NOT suppress the
+    scheduled reminder and start messages later the same day."""
+    from ppbot.daily import set_leader
+    from ppbot.scheduler import reminder_loop
+
+    await seed_chat(storage, next_index=0)
+    members = await storage.get_members(1)
+    new_next, err = set_leader(members, 0, 1, "2026-08-03")
+    assert err is None
+    chat = await storage.get_chat(1)
+    chat.next_index = new_next
+    await storage.upsert_chat(chat)
+
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 3, 9, 45, tzinfo=ZoneInfo("UTC"))
+    await run_one_iteration(
+        reminder_loop, bot, storage, FakeWorkdays(True),
+        FakeClock([now, now + datetime.timedelta(seconds=35)]),
+    )
+    assert len(bot.sent) == 1
+    assert "Сегодня ведущий - @u1" in bot.sent[0]["text"]
+
+    bot2 = FakeBot()
+    now2 = datetime.datetime(2026, 8, 3, 10, 30, tzinfo=ZoneInfo("UTC"))
+    await run_one_iteration(
+        reminder_loop, bot2, storage, FakeWorkdays(True),
+        FakeClock([now2, now2 + datetime.timedelta(seconds=35)]),
+    )
+    assert len(bot2.sent) == 1
+    assert "Дейлик начинается, всех ждем!" in bot2.sent[0]["text"]
+    chat = await storage.get_chat(1)
+    assert chat.last_start_date == "2026-08-03"

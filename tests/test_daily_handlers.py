@@ -458,10 +458,10 @@ async def test_leader_picker_button_opens_picker(dp, bot, session, storage):
     cb = make_callback(msg, "daily:lead")
     await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
 
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "Кто сегодня ведёт?" in sends[0]["text"]
-    markup = sends[0]["reply_markup"]
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert "Кто сегодня ведёт?" in edits[0]["text"]
+    markup = edits[0]["reply_markup"]
     flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
     assert "daily:lead:0" in flat
     assert "daily:lead:1" in flat
@@ -645,10 +645,10 @@ async def test_vacation_picker_opens_and_selects(dp, bot, session, storage):
     cb = make_callback(msg, "daily:vac")
     await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
 
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "Кто уходит в отпуск?" in sends[0]["text"]
-    markup = sends[0]["reply_markup"]
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert "Кто уходит в отпуск?" in edits[0]["text"]
+    markup = edits[0]["reply_markup"]
     flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
     assert "daily:vac:1" in flat
     session.calls.clear()
@@ -689,3 +689,42 @@ async def test_setleader_then_vacationed_member_skipped_in_rotation(dp, bot, ses
     members = await storage.get_members(-1001)
     leader = next_leader(members, 1, today_str())
     assert leader.first_name == "C"
+
+
+@pytest.mark.asyncio
+async def test_menu_callback_edits_in_place(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:menu")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert "📋 Дейлик" in edits[0]["text"]
+    assert not [p for m, p in session.calls if m == "sendMessage"]
+
+
+@pytest.mark.asyncio
+async def test_team_callback_edits_in_place(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:team")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert "Состав команды" in edits[0]["text"]
+    assert not [p for m, p in session.calls if m == "sendMessage"]
+
+
+@pytest.mark.asyncio
+async def test_who_callback_edits_in_place(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:who")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert "Сегодня ведёт @a" in edits[0]["text"]
+    assert not [p for m, p in session.calls if m == "sendMessage"]

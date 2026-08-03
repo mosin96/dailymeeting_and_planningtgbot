@@ -81,7 +81,7 @@ def build_member_picker_markup(members: List[DailyMember], prefix: str) -> Inlin
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def show_menu(message: Message, daily: DailyRegistry, tz) -> None:
+async def show_menu(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
     chat_id = message.chat.id
     chat = await daily.get_chat(chat_id)
     members = await daily.get_members(chat_id)
@@ -96,14 +96,19 @@ async def show_menu(message: Message, daily: DailyRegistry, tz) -> None:
         "👥 Участников: {count}\n"
         "👤 Сегодня ведёт: {leader}"
     ).format(time=chat.daily_time, count=len(members), leader=leader_str)
-    await message.answer(text, reply_markup=build_menu_markup())
+    if edit:
+        await message.edit_text(text, reply_markup=build_menu_markup())
+    else:
+        await message.answer(text, reply_markup=build_menu_markup())
 
 
-async def show_team(message: Message, daily: DailyRegistry) -> None:
+async def show_team(message: Message, daily: DailyRegistry, edit: bool = False) -> None:
     chat_id = message.chat.id
     members = await daily.get_members(chat_id)
     text = "Состав команды:\n" + member_list_text(members)
-    rows = [[InlineKeyboardButton(text="➕ Добавить", callback_data=PREFIX_ADD)]]
+    rows = [
+        [InlineKeyboardButton(text="➕ Добавить", callback_data=PREFIX_ADD)]
+    ]
     remove_row = [
         InlineKeyboardButton(
             text="❌ {}".format(m.display_name),
@@ -114,13 +119,14 @@ async def show_team(message: Message, daily: DailyRegistry) -> None:
     if remove_row:
         rows.append(remove_row)
     rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_MENU)])
-    await message.answer(
-        text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
+    markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    if edit:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
 
 
-async def who_reply(message: Message, daily: DailyRegistry, tz) -> None:
+async def who_reply(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
     chat_id = message.chat.id
     chat = await daily.get_chat(chat_id)
     members = await daily.get_members(chat_id)
@@ -130,14 +136,20 @@ async def who_reply(message: Message, daily: DailyRegistry, tz) -> None:
     leader = today_leader(members, chat.next_index, today)
     if leader is None:
         if not members:
-            await message.answer("Команда пуста. Добавьте участников через /team")
+            text = "Команда пуста. Добавьте участников через /team"
         else:
-            await message.answer("Все пропущены сегодня, дейлик отменён")
+            text = "Все пропущены сегодня, дейлик отменён"
+        if edit:
+            await message.edit_text(text)
+        else:
+            await message.answer(text)
         return
-    await message.answer(
-        "Сегодня ведёт {}".format(leader.display_name),
-        reply_markup=build_reminder_markup(leader),
-    )
+    text = "Сегодня ведёт {}".format(leader.display_name)
+    markup = build_reminder_markup(leader)
+    if edit:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
 
 
 GREETING_HELP = (

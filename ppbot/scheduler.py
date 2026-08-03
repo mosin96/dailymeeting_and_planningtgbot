@@ -156,6 +156,13 @@ async def reminder_loop(
     while True:
         try:
             current = now()
+            # Production clock (datetime.now(tz)) is tz-aware, but the
+            # should_send_* decision functions build naive windows via
+            # datetime.combine(). Normalize once here so the comparisons
+            # never raise the aware-vs-naive TypeError (which the broad
+            # except below would otherwise swallow, silently killing the
+            # reminder/start/advance in production).
+            current = current.replace(tzinfo=None)
             today = current.date()
             is_workday = await workday_client.is_workday(today)
             for chat in await storage.list_chats():

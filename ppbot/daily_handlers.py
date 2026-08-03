@@ -91,12 +91,12 @@ def create_router() -> Router:
 
     @r.callback_query(F.data == PREFIX_MENU)
     async def menu_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
-        await show_menu(callback.message, daily, tz)
+        await show_menu(callback.message, daily, tz, edit=True)
         await callback.answer()
 
     @r.callback_query(F.data == PREFIX_TEAM)
     async def team_callback(callback: CallbackQuery, daily: DailyRegistry):
-        await show_team(callback.message, daily)
+        await show_team(callback.message, daily, edit=True)
         await callback.answer()
 
     @r.callback_query(F.data == PREFIX_ADD)
@@ -113,7 +113,7 @@ def create_router() -> Router:
         if chat is None:
             chat = DailyChat(chat_id=callback.message.chat.id)
             await daily.upsert_chat(chat)
-        await show_team(callback.message, daily)
+        await show_team(callback.message, daily, edit=True)
         await callback.answer()
 
     @r.message(AddMember.waiting)
@@ -187,7 +187,7 @@ def create_router() -> Router:
 
     @r.callback_query(F.data == PREFIX_WHO)
     async def who_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
-        await who_reply(callback.message, daily, tz)
+        await who_reply(callback.message, daily, tz, edit=True)
         await callback.answer()
 
     @r.message(Command("who"))
@@ -255,7 +255,7 @@ def create_router() -> Router:
 
     @r.callback_query(F.data == PREFIX_HELP)
     async def help_callback(callback: CallbackQuery):
-        await callback.message.answer(GREETING_HELP)
+        await callback.message.edit_text(GREETING_HELP)
         await callback.answer()
 
     @r.message(Command("help"))
@@ -275,7 +275,7 @@ def create_router() -> Router:
             await callback.message.answer("Команда пуста. Добавьте участников через /team")
             await callback.answer()
             return
-        await callback.message.answer(
+        await callback.message.edit_text(
             "Кто сегодня ведёт?",
             reply_markup=build_member_picker_markup(members, PREFIX_LEAD),
         )
@@ -340,7 +340,7 @@ def create_router() -> Router:
             await callback.message.answer("Команда пуста. Добавьте участников через /team")
             await callback.answer()
             return
-        await callback.message.answer(
+        await callback.message.edit_text(
             "Кто уходит в отпуск?",
             reply_markup=build_member_picker_markup(members, PREFIX_VAC),
         )
