@@ -19,7 +19,6 @@ from ppbot.daily import (
     parse_vacation_date,
     set_leader,
     today_in_tz,
-    today_leader,
 )
 from ppbot.daily_storage import DailyRegistry
 from ppbot.game import GameRegistry
@@ -39,6 +38,8 @@ from ppbot.daily_ui import (
     PREFIX_VAC,
     PREFIX_VACATION,
     PREFIX_WHO,
+    _ensure_today_schedule,
+    _schedule_leader,
     build_member_picker_markup,
     show_menu,
     show_remove_list,
@@ -226,13 +227,14 @@ def create_router() -> Router:
             return
         if chat is None:
             chat = DailyChat(chat_id=message.chat.id)
-        today = str(today_in_tz(tz))
-        leader = today_leader(members, chat.next_index, today)
+        today = today_in_tz(tz)
+        schedule = await _ensure_today_schedule(daily, chat, members, today)
+        leader = await _schedule_leader(schedule, members, str(today))
         if leader is None:
             await message.answer("Все пропущены сегодня")
             return
         new_members, new_next, msg = apply_substitute(
-            members, chat.next_index, leader.position, today
+            members, chat.next_index, leader.position, str(today)
         )
         await daily.replace_members(message.chat.id, new_members)
         chat.next_index = new_next

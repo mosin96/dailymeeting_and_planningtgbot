@@ -1,6 +1,7 @@
 """Daily standup storage: DailyRegistry on aiosqlite."""
 from __future__ import annotations
 
+import datetime
 from typing import Dict, List, Optional
 
 import aiosqlite
@@ -277,6 +278,57 @@ class DailyRegistry:
         """
         rows = build_schedule(members, today, next_index, SCHEDULE_DAYS + 1)
         await self.set_schedule(chat_id, [(d.isoformat(), p) for d, p in rows])
+
+    async def ensure_schedule(
+        self,
+        chat: DailyChat,
+        members: List[DailyMember],
+        today,
+    ) -> None:
+        """Guarantee the daily_schedule window covers today..today+14.
+
+        If the schedule is missing or stale (today absent), rebuild the full
+        window from today with `chat.next_index` as the seed. Otherwise extend
+        the tail one day at a time (the new 14th-day leader, continuing the
+        rotation after the last scheduled position) and trim rows dated more
+        than 14 days ago.
+
+        Also keeps `chat.next_index` in sync with today's scheduled leader so
+        the on-the-fly rotation readers (/who, /daily, /substitute) match the
+        announced reminder without depending on the schedule table.
+        """
+        today_s = str(today)
+        schedule = await self.get_schedule(chat.chat_id)
+        if not schedule or today_s not in schedule:
+            rows = build_schedule(members, today, chat.next_index, SCHEDULE_DAYS + 1)
+            await self.set_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
+            schedule = {d.isoformat(): p for d, p in rows}
+
+        target = today + datetime.timedelta(days=SCHEDULE_DAYS)
+        target_s = str(target)
+        if target_s not in schedule:
+            last_date = max(schedule)
+            last_pos = schedule[last_date]
+            n = len(members)
+            if n == 0:
+                cursor = 0
+            elif last_pos is None:
+                cursor = chat.next_index % n
+            else:
+                cursor = (last_pos + 1) % n
+            start = datetime.date.fromisoformat(last_date) + datetime.timedelta(days=1)
+            days = (target - start).days + 1
+            rows = build_schedule(members, start, cursor, days)
+            await self.extend_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
+            schedule.update({d.isoformat(): p for d, p in rows})
+
+        earliest = today - datetime.timedelta(days=SCHEDULE_DAYS)
+        await self.trim_schedule(chat.chat_id, str(earliest))
+
+        position = schedule.get(today_s)
+        if position is not None and chat.next_index != position:
+            chat.next_index = position
+            await self.upsert_chat(chat)
 
     async def extend_schedule(self, chat_id: int, rows: List[tuple]):
         """Append new (date, position) rows and drop rows older than the

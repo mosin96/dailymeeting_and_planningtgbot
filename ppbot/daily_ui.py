@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import List
+from typing import Dict, List, Optional
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -11,9 +11,7 @@ from ppbot.daily import (
     DailyMember,
     format_ru_date,
     member_list_text,
-    next_leader,
     today_in_tz,
-    today_leader,
 )
 from ppbot.daily_storage import DailyRegistry
 
@@ -111,14 +109,37 @@ def build_remove_markup(members: List[DailyMember]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+async def _ensure_today_schedule(daily: DailyRegistry, chat: DailyChat, members: List[DailyMember], today) -> Dict[str, Optional[int]]:
+    """Ensure the persisted 14-day schedule covers today, return it as dict.
+
+    Mirrors the scheduler's window maintenance so the /who and /daily views
+    always read the same source of truth as the reminder.
+    """
+    await daily.ensure_schedule(chat, members, today)
+    return await daily.get_schedule(chat.chat_id)
+
+
+async def _schedule_leader(
+    schedule: Dict[str, Optional[int]],
+    members: List[DailyMember],
+    day_s: str,
+) -> Optional[DailyMember]:
+    """Member scheduled to lead on `day_s` (position -> member lookup)."""
+    position = schedule.get(day_s)
+    if position is None:
+        return None
+    return next((m for m in members if m.position == position), None)
+
+
 async def show_menu(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
     chat_id = message.chat.id
     chat = await daily.get_chat(chat_id)
     members = await daily.get_members(chat_id)
     if chat is None:
         chat = DailyChat(chat_id=chat_id)
-    today = str(today_in_tz(tz))
-    leader = today_leader(members, chat.next_index, today)
+    today = today_in_tz(tz)
+    schedule = await _ensure_today_schedule(daily, chat, members, today)
+    leader = await _schedule_leader(schedule, members, str(today))
     leader_str = leader.display_name if leader else "—"
     text = (
         "📋 Дейлик\n"
@@ -170,7 +191,8 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
     today_s = str(today)
     if chat is None:
         chat = DailyChat(chat_id=chat_id)
-    leader = today_leader(members, chat.next_index, today_s)
+    schedule = await _ensure_today_schedule(daily, chat, members, today)
+    leader = await _schedule_leader(schedule, members, today_s)
     if leader is None:
         if not members:
             text = "Команда пуста. Добавьте участников через /team"
@@ -191,9 +213,8 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
         )
         text += "\nВ отпуске: {}".format(parts)
     if members:
-        tomorrow_s = str(today + datetime.timedelta(days=1))
-        tomorrow_leader = next_leader(
-            members, (leader.position + 1) % len(members), tomorrow_s
+        tomorrow_leader = await _schedule_leader(
+            schedule, members, str(today + datetime.timedelta(days=1))
         )
         if tomorrow_leader is not None:
             text += "\nЗавтра ведёт {}".format(tomorrow_leader.display_name)

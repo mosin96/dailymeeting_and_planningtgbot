@@ -70,53 +70,11 @@ def should_send_start(chat: DailyChat, now: datetime.datetime, today: datetime.d
     return daily_dt <= now < daily_dt + datetime.timedelta(minutes=START_GRACE_MINUTES)
 
 
-async def _ensure_schedule(
-    storage: DailyRegistry,
-    chat: DailyChat,
-    members,
-    today: datetime.date,
-) -> None:
-    """Guarantee the daily_schedule window covers today..today+14.
-
-    If the schedule is missing or stale (today absent), rebuild the full
-    window from today with `chat.next_index` as the seed. Otherwise extend
-    the tail one day at a time (the new 14th-day leader, continuing the
-    rotation after the last scheduled position) and trim rows dated more
-    than 14 days ago.
-    """
-    today_s = str(today)
-    schedule = await storage.get_schedule(chat.chat_id)
-    if not schedule or today_s not in schedule:
-        rows = build_schedule(members, today, chat.next_index, SCHEDULE_DAYS + 1)
-        await storage.set_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
-        return
-
-    target = today + datetime.timedelta(days=SCHEDULE_DAYS)
-    target_s = str(target)
-    if target_s not in schedule:
-        last_date = max(schedule)
-        last_pos = schedule[last_date]
-        n = len(members)
-        if n == 0:
-            cursor = 0
-        elif last_pos is None:
-            cursor = chat.next_index % n
-        else:
-            cursor = (last_pos + 1) % n
-        start = datetime.date.fromisoformat(last_date) + datetime.timedelta(days=1)
-        days = (target - start).days + 1
-        rows = build_schedule(members, start, cursor, days)
-        await storage.extend_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
-
-    earliest = today - datetime.timedelta(days=SCHEDULE_DAYS)
-    await storage.trim_schedule(chat.chat_id, str(earliest))
-
-
 async def _process_chat(bot: Bot, storage: DailyRegistry, chat: DailyChat, now: datetime.datetime, today: datetime.date, is_workday: bool):
     today_s = str(today)
 
     members = await storage.get_members(chat.chat_id)
-    await _ensure_schedule(storage, chat, members, today)
+    await storage.ensure_schedule(chat, members, today)
     schedule = await storage.get_schedule(chat.chat_id)
     position = schedule.get(today_s)
     leader = next((m for m in members if m.position == position), None) if position is not None else None

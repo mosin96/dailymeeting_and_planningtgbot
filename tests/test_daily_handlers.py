@@ -243,6 +243,27 @@ async def test_who_has_main_menu_button(dp, bot, session, storage):
 
 
 @pytest.mark.asyncio
+async def test_who_follows_schedule_not_stale_next_index(dp, bot, session, storage):
+    """Regression: /who must read today's leader from the persisted schedule
+    (the reminder's source of truth), not from a stale chat.next_index that
+    froze at migration day and is no longer advanced by the scheduler."""
+    await seed(storage, next_index=0)
+    today = datetime.date.today()
+    rows = [
+        ((today + datetime.timedelta(days=i)).isoformat(), 2)
+        for i in range(15)
+    ]
+    await storage.set_schedule(-1001, rows)
+    msg = make_message("/who")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    assert "Сегодня ведёт @c" in sends[0]["text"]
+    assert "@a" not in sends[0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_substitute_command(dp, bot, session, storage):
     await seed(storage, next_index=0)
     msg = make_message("/substitute")
