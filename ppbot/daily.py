@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple
 
 VACATION_DATE_RE = re.compile(r"(\d{1,2})[./](\d{1,2})[./](\d{4})")
 ISO_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+VACATION_RANGE_RE = re.compile(r"^(\d{1,2})[./](\d{1,2})[./](\d{4})-(\d{1,2})[./](\d{1,2})[./](\d{4})$")
 
 SCHEDULE_DAYS = 14
 
@@ -22,12 +23,17 @@ class DailyMember:
     username: Optional[str] = None
     skip_date: Optional[str] = None
     vacation_until: Optional[str] = None
+    vacation_start: Optional[str] = None
 
     def is_skipped(self, today: str) -> bool:
         return self.skip_date == today
 
     def is_on_vacation(self, today: str) -> bool:
-        return bool(self.vacation_until) and today <= self.vacation_until
+        if not self.vacation_until:
+            return False
+        if self.vacation_start is None:
+            return today <= self.vacation_until
+        return self.vacation_start <= today <= self.vacation_until
 
     def is_unavailable(self, today: str) -> bool:
         return self.is_skipped(today) or self.is_on_vacation(today)
@@ -64,6 +70,7 @@ class DailyMember:
             "first_name": self.first_name,
             "skip_date": self.skip_date,
             "vacation_until": self.vacation_until,
+            "vacation_start": self.vacation_start,
         }
 
     @classmethod
@@ -76,6 +83,7 @@ class DailyMember:
             username=dct.get("username"),
             skip_date=dct.get("skip_date"),
             vacation_until=dct.get("vacation_until"),
+            vacation_start=dct.get("vacation_start"),
         )
 
 
@@ -358,6 +366,31 @@ def parse_vacation_date(text: str) -> Optional[str]:
     if not (1 <= day <= 31 and 1 <= month <= 12 and 2000 <= year <= 2100):
         return None
     return "{:04d}-{:02d}-{:02d}".format(year, month, day)
+
+
+def parse_vacation_range(text: str) -> Optional[Tuple[Optional[str], Optional[str]]]:
+    """Parse vacation input: 'ДД.ММ.ГГГГ-ДД.ММ.ГГГГ' -> (start_iso, end_iso).
+
+    A single date (RU or ISO) is a legacy end-only vacation -> (None, end_iso).
+    Returns None for anything unparseable or when start > end. Both ends are
+    inclusive. Only the RU format is accepted for ranges.
+    """
+    if not text:
+        return None
+    stripped = text.strip()
+    if VACATION_RANGE_RE.match(stripped):
+        start_raw, end_raw = stripped.split("-", 1)
+        start = parse_vacation_date(start_raw)
+        end = parse_vacation_date(end_raw)
+        if start is None or end is None or start > end:
+            return None
+        return start, end
+    if not VACATION_DATE_RE.fullmatch(stripped) and not ISO_DATE_RE.fullmatch(stripped):
+        return None
+    end = parse_vacation_date(stripped)
+    if end is None:
+        return None
+    return None, end
 
 
 def format_ru_date(iso: str) -> str:

@@ -10,11 +10,15 @@ from ppbot.daily import (
     member_list_text,
     next_leader,
     parse_vacation_date,
+    parse_vacation_range,
     set_leader,
 )
 
 
-def member(pos, name="X", user_id=None, username=None, skip_date=None, vacation_until=None):
+def member(
+    pos, name="X", user_id=None, username=None, skip_date=None,
+    vacation_until=None, vacation_start=None,
+):
     return DailyMember(
         chat_id=1,
         position=pos,
@@ -23,6 +27,7 @@ def member(pos, name="X", user_id=None, username=None, skip_date=None, vacation_
         username=username,
         skip_date=skip_date,
         vacation_until=vacation_until,
+        vacation_start=vacation_start,
     )
 
 
@@ -183,6 +188,29 @@ def test_is_on_vacation_false_when_unset():
     assert m.is_on_vacation("2026-08-05") is False
 
 
+def test_is_on_vacation_range_inside():
+    m = member(0, "A", vacation_start="2026-08-05", vacation_until="2026-08-10")
+    assert m.is_on_vacation("2026-08-07") is True
+
+
+def test_is_on_vacation_range_inclusive_start_and_end():
+    m = member(0, "A", vacation_start="2026-08-05", vacation_until="2026-08-10")
+    assert m.is_on_vacation("2026-08-05") is True
+    assert m.is_on_vacation("2026-08-10") is True
+
+
+def test_is_on_vacation_range_outside():
+    m = member(0, "A", vacation_start="2026-08-05", vacation_until="2026-08-10")
+    assert m.is_on_vacation("2026-08-04") is False
+    assert m.is_on_vacation("2026-08-11") is False
+
+
+def test_is_on_vacation_legacy_with_start_none():
+    m = member(0, "A", vacation_start=None, vacation_until="2026-08-05")
+    assert m.is_on_vacation("2026-08-05") is True
+    assert m.is_on_vacation("2026-08-06") is False
+
+
 def test_is_unavailable_combines_skip_and_vacation():
     skipped = member(0, "A", skip_date="2026-08-03")
     assert skipped.is_unavailable("2026-08-03") is True
@@ -214,6 +242,29 @@ def test_parse_vacation_date_invalid():
     assert parse_vacation_date("garbage") is None
     assert parse_vacation_date("") is None
     assert parse_vacation_date("05.08.26") is None
+
+
+def test_parse_vacation_range_ru_range():
+    assert parse_vacation_range("05.08.2026-10.08.2026") == ("2026-08-05", "2026-08-10")
+    assert parse_vacation_range("5.8.2026-10.8.2026") == ("2026-08-05", "2026-08-10")
+
+
+def test_parse_vacation_range_single_date():
+    assert parse_vacation_range("05.08.2026") == (None, "2026-08-05")
+    assert parse_vacation_range("2026-08-05") == (None, "2026-08-05")
+
+
+def test_parse_vacation_range_inverted_rejected():
+    assert parse_vacation_range("10.08.2026-05.08.2026") is None
+
+
+def test_parse_vacation_range_mixed_format_rejected():
+    assert parse_vacation_range("05.08.2026-2026-08-10") is None
+
+
+def test_parse_vacation_range_invalid():
+    assert parse_vacation_range("garbage") is None
+    assert parse_vacation_range("") is None
 
 
 def test_format_ru_date():
