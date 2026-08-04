@@ -276,14 +276,53 @@ def test_member_list_text_vacation_suffix():
         member(0, "Иван", vacation_until="2026-08-05"),
         member(1, "Пётр"),
     ]
-    text = member_list_text(m)
+    text = member_list_text(m, today="2026-08-03")
     assert "1. Иван (в отпуске до 05.08.2026)" in text
     assert "2. Пётр" in text
+
+
+def test_member_list_text_no_badge_when_vacation_over():
+    m = [member(0, "Иван", vacation_until="2026-08-02")]
+    text = member_list_text(m, today="2026-08-03")
+    assert "в отпуске" not in text
+
+
+def test_member_list_text_no_badge_future_vacation():
+    m = [member(0, "Иван", vacation_start="2026-08-05", vacation_until="2026-08-10")]
+    text = member_list_text(m, today="2026-08-03")
+    assert "в отпуске" not in text
+
+
+def test_member_list_text_badge_inside_range():
+    m = [member(0, "Иван", vacation_start="2026-08-05", vacation_until="2026-08-10")]
+    text = member_list_text(m, today="2026-08-07")
+    assert "1. Иван (в отпуске до 10.08.2026)" in text
+
+
+def test_member_list_text_legacy_badge_until():
+    m = [member(0, "Иван", vacation_until="2026-08-05")]
+    assert "в отпуске" in member_list_text(m, today="2026-08-05")
+    assert "в отпуске" not in member_list_text(m, today="2026-08-06")
 
 
 def test_to_dict_from_dict_roundtrip_vacation():
     m = member(0, "Иван", vacation_until="2026-08-05")
     restored = DailyMember.from_dict(m.to_dict())
+    assert restored.vacation_until == "2026-08-05"
+
+
+def test_to_dict_from_dict_roundtrip_vacation_range():
+    m = member(0, "Иван", vacation_start="2026-08-05", vacation_until="2026-08-10")
+    restored = DailyMember.from_dict(m.to_dict())
+    assert restored.vacation_start == "2026-08-05"
+    assert restored.vacation_until == "2026-08-10"
+
+
+def test_from_dict_old_dict_without_vacation_start():
+    dct = member(0, "Иван", vacation_until="2026-08-05").to_dict()
+    dct.pop("vacation_start")
+    restored = DailyMember.from_dict(dct)
+    assert restored.vacation_start is None
     assert restored.vacation_until == "2026-08-05"
 
 

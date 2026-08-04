@@ -335,13 +335,13 @@ def apply_skip(
     return members, new_next, new_leader, None
 
 
-def member_list_text(members: List[DailyMember]) -> str:
+def member_list_text(members: List[DailyMember], today: str) -> str:
     if not members:
         return "Команда пуста. Добавьте участников через /team"
     lines = []
     for m in members:
         line = "{}. {}".format(m.position + 1, m.display_name)
-        if m.vacation_until:
+        if m.is_on_vacation(today):
             line += " (в отпуске до {})".format(format_ru_date(m.vacation_until))
         lines.append(line)
     return "\n".join(lines)

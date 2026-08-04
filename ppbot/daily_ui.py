@@ -153,10 +153,10 @@ async def show_menu(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
         await message.answer(text, reply_markup=build_menu_markup())
 
 
-async def show_team(message: Message, daily: DailyRegistry, edit: bool = False) -> None:
+async def show_team(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
     chat_id = message.chat.id
     members = await daily.get_members(chat_id)
-    text = "Состав команды:\n" + member_list_text(members)
+    text = "Состав команды:\n" + member_list_text(members, str(today_in_tz(tz)))
     rows = [
         [InlineKeyboardButton(text="➕ Добавить", callback_data=PREFIX_ADD)],
         [InlineKeyboardButton(text="✖️ Удалить участника", callback_data=PREFIX_REMOVE_LIST)],
@@ -169,13 +169,13 @@ async def show_team(message: Message, daily: DailyRegistry, edit: bool = False) 
         await message.answer(text, reply_markup=markup)
 
 
-async def show_remove_list(message: Message, daily: DailyRegistry, edit: bool = False) -> None:
+async def show_remove_list(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
     chat_id = message.chat.id
     members = await daily.get_members(chat_id)
     if not members:
         text = "Команда пуста. Добавьте участников через /team"
     else:
-        text = "Удаление участников:\n" + member_list_text(members)
+        text = "Удаление участников:\n" + member_list_text(members, str(today_in_tz(tz)))
     markup = build_remove_markup(members)
     if edit:
         await message.edit_text(text, reply_markup=markup)

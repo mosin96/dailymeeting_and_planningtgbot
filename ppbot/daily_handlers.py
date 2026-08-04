@@ -112,8 +112,8 @@ def create_router() -> Router:
         await callback.answer()
 
     @r.callback_query(F.data == PREFIX_TEAM)
-    async def team_callback(callback: CallbackQuery, daily: DailyRegistry):
-        await show_team(callback.message, daily, edit=True)
+    async def team_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
+        await show_team(callback.message, daily, tz, edit=True)
         await callback.answer()
 
     @r.callback_query(F.data == PREFIX_ADD)
@@ -123,8 +123,8 @@ def create_router() -> Router:
         await callback.answer()
 
     @r.callback_query(F.data == PREFIX_REMOVE_LIST)
-    async def remove_list_callback(callback: CallbackQuery, daily: DailyRegistry):
-        await show_remove_list(callback.message, daily, edit=True)
+    async def remove_list_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
+        await show_remove_list(callback.message, daily, tz, edit=True)
         await callback.answer()
 
     @r.callback_query(F.data.regexp(r"^{}(.+)$".format(PREFIX_REMOVE)))
@@ -136,7 +136,7 @@ def create_router() -> Router:
             chat = DailyChat(chat_id=callback.message.chat.id)
             await daily.upsert_chat(chat)
         await _refresh_schedule(daily, callback.message.chat.id, tz)
-        await show_remove_list(callback.message, daily, edit=True)
+        await show_remove_list(callback.message, daily, tz, edit=True)
         await callback.answer()
 
     @r.message(AddMember.waiting)
@@ -182,7 +182,7 @@ def create_router() -> Router:
             await daily.upsert_chat(chat)
         await _refresh_schedule(daily, chat_id, tz)
         await state.clear()
-        await show_team(message, daily)
+        await show_team(message, daily, tz)
 
     @r.callback_query(F.data == PREFIX_TIME)
     async def time_callback(callback: CallbackQuery, state: FSMContext):
@@ -306,8 +306,8 @@ def create_router() -> Router:
         await message.answer(GREETING_HELP)
 
     @r.message(Command("team"))
-    async def team_command(message: Message, daily: DailyRegistry):
-        await show_team(message, daily)
+    async def team_command(message: Message, daily: DailyRegistry, tz):
+        await show_team(message, daily, tz)
 
     # ---- manual leader override ----
 
