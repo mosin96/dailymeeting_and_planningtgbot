@@ -31,25 +31,25 @@ The bot reminds the team who leads today's daily standup. Configuration is per c
 | `/who` | Who leads today |
 | `/substitute` | Substitute today's leader |
 | `/setleader @ник` | Manually set today's leader (or reply to a member's message) |
-| `/vacation @ник ДД.ММ.ГГГГ` | Set a member's vacation end date (`снять` — restore) |
+| `/vacation @ник ДД.ММ.ГГГГ-ДД.ММ.ГГГГ` | Отпуск с даты по дату (или ДД.ММ.ГГГГ — до даты; «снять» — убрать) |
 | `/help` | Full help text |
 
 The "who leads today" reminder message contains two buttons available to any chat member:
 
-- **«Подмените меня»** — one-time substitution: the next non-skipped member leads today, the requester leads tomorrow.
+- **«Подмените меня»** — today's scheduled leader and tomorrow's scheduled leader swap places in the schedule for these two days (the member order in the team list is not changed).
 - **«Пропуск»** — one-time skip without substitution (the position in the rotation stays the same).
 
 The `/daily` menu also has two quick-action buttons:
 
 - **«Выбрать ведущего»** — opens a member picker to manually set today's leader.
-- **«Отпуск»** — opens a member picker to set a member's vacation end date.
+- **«Отпуск»** — opens a member picker to set a member's vacation (single date or date range).
 
 ### Manual leader override
 `/setleader @ник` (or reply to a member's message, or pick from the `/daily` menu) makes the chosen member lead **today**. The rotation continues from the member after them — the queue order is not changed.
 
 ### Vacation
 
-`/vacation @ник 05.08.2026` marks a member as on vacation until that date (inclusive). While on vacation the member is automatically skipped in every rotation path (reminder tag, `/who`, `/daily` status, substitute, skip). `/vacation @ник снять` restores them. The team list shows a `(в отпуске до ДД.ММ.ГГГГ)` suffix, and the 15-minute reminder appends `В отпуске: Имя (до ДД.ММ.ГГГГ)` using plain names (no `@` mention, no link).
+`/vacation @ник 05.08.2026-10.08.2026` marks a member as on vacation from the start to the end date (both inclusive). A single date `/vacation @ник 05.08.2026` is the legacy form and means "until that date (inclusive)". `/vacation @ник снять` clears both. While on vacation the member is automatically skipped in every rotation path (reminder tag, `/who`, `/daily` status, substitute, skip). The team list shows a `(в отпуске до ДД.ММ.ГГГГ)` suffix, and the 15-minute reminder appends `В отпуске: Имя (до ДД.ММ.ГГГГ)` using plain names (no `@` mention, no link). The suffix and the reminder appear only while the member is currently on vacation.
 
 Workdays are synchronized with the public `isdayoff.ru` API (Russian corporate calendar, includes public holidays and rescheduled days). If the API is unavailable, the bot falls back to Mon–Fri.
 
