@@ -69,6 +69,8 @@ class DailyRegistry:
             mcols = [row[1] for row in await cursor.fetchall()]
         if "vacation_until" not in mcols:
             await self._db.execute("ALTER TABLE daily_members ADD COLUMN vacation_until TEXT")
+        if "vacation_start" not in mcols:
+            await self._db.execute("ALTER TABLE daily_members ADD COLUMN vacation_start TEXT")
         await self._db.commit()
 
     # ---- meta ----
@@ -159,7 +161,8 @@ class DailyRegistry:
 
     async def get_members(self, chat_id: int) -> List[DailyMember]:
         query = (
-            "SELECT chat_id, position, user_id, username, first_name, skip_date, vacation_until "
+            "SELECT chat_id, position, user_id, username, first_name, skip_date, "
+            "vacation_until, vacation_start "
             "FROM daily_members WHERE chat_id = ? ORDER BY position"
         )
         async with self._db.execute(query, (chat_id,)) as cursor:
@@ -173,6 +176,7 @@ class DailyRegistry:
                 first_name=r[4],
                 skip_date=r[5],
                 vacation_until=r[6],
+                vacation_start=r[7],
             )
             for r in rows
         ]
@@ -181,10 +185,10 @@ class DailyRegistry:
         async with self._db.execute("BEGIN"):
             await self._db.execute("DELETE FROM daily_members WHERE chat_id = ?", (chat_id,))
             await self._db.executemany(
-                "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date, vacation_until) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date, vacation_until, vacation_start) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (m.chat_id, m.position, m.user_id, m.username, m.first_name, m.skip_date, m.vacation_until)
+                    (m.chat_id, m.position, m.user_id, m.username, m.first_name, m.skip_date, m.vacation_until, m.vacation_start)
                     for m in members
                 ],
             )
@@ -192,9 +196,9 @@ class DailyRegistry:
 
     async def add_member(self, member: DailyMember):
         await self._db.execute(
-            "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date, vacation_until) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (member.chat_id, member.position, member.user_id, member.username, member.first_name, member.skip_date, member.vacation_until),
+            "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date, vacation_until, vacation_start) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (member.chat_id, member.position, member.user_id, member.username, member.first_name, member.skip_date, member.vacation_until, member.vacation_start),
         )
         await self._db.commit()
 
@@ -232,10 +236,10 @@ class DailyRegistry:
         )
         await self._db.commit()
 
-    async def update_member_vacation(self, chat_id: int, position: int, vacation_until: Optional[str]):
+    async def update_member_vacation(self, chat_id: int, position: int, vacation_until: Optional[str], vacation_start: Optional[str] = None):
         await self._db.execute(
-            "UPDATE daily_members SET vacation_until = ? WHERE chat_id = ? AND position = ?",
-            (vacation_until, chat_id, position),
+            "UPDATE daily_members SET vacation_until = ?, vacation_start = ? WHERE chat_id = ? AND position = ?",
+            (vacation_until, vacation_start, chat_id, position),
         )
         await self._db.commit()
 
@@ -266,6 +270,32 @@ class DailyRegistry:
             await self._db.executemany(
                 "INSERT INTO daily_schedule (chat_id, date, position) VALUES (?, ?, ?)",
                 [(chat_id, d, pos) for d, pos in rows],
+            )
+        await self._db.commit()
+
+    async def swap_schedule_dates(self, chat_id: int, date_a: str, date_b: str) -> None:
+        """Swap the scheduled positions for two dates, transactionally.
+
+        Other rows are untouched. No-op (commit + return) if either date has
+        no row in the chat's schedule window.
+        """
+        async with self._db.execute("BEGIN"):
+            async with self._db.execute(
+                "SELECT date, position FROM daily_schedule WHERE chat_id = ? AND date IN (?, ?)",
+                (chat_id, date_a, date_b),
+            ) as cursor:
+                rows = await cursor.fetchall()
+            pos = {d: p for d, p in rows}
+            if date_a not in pos or date_b not in pos:
+                await self._db.commit()
+                return
+            await self._db.execute(
+                "UPDATE daily_schedule SET position = ? WHERE chat_id = ? AND date = ?",
+                (pos[date_b], chat_id, date_a),
+            )
+            await self._db.execute(
+                "UPDATE daily_schedule SET position = ? WHERE chat_id = ? AND date = ?",
+                (pos[date_a], chat_id, date_b),
             )
         await self._db.commit()
 

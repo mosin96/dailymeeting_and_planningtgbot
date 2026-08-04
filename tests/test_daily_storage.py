@@ -1,4 +1,6 @@
 """DailyRegistry storage tests (aiosqlite on tmp file)."""
+import datetime
+
 import pytest
 
 from ppbot.daily import DailyChat, DailyMember
@@ -14,8 +16,8 @@ async def registry(tmp_path):
     await r.close()
 
 
-def member(chat_id, pos, name="X", user_id=None, username=None, skip_date=None, vacation_until=None):
-    return DailyMember(
+def member(chat_id, pos, name="X", user_id=None, username=None, skip_date=None, vacation_until=None, vacation_start=None):
+    m = DailyMember(
         chat_id=chat_id,
         position=pos,
         first_name=name,
@@ -24,6 +26,11 @@ def member(chat_id, pos, name="X", user_id=None, username=None, skip_date=None, 
         skip_date=skip_date,
         vacation_until=vacation_until,
     )
+    # T1 adds the vacation_start field to DailyMember in parallel; setattr keeps
+    # this helper working in both timelines until that field lands.
+    if vacation_start is not None:
+        m.vacation_start = vacation_start
+    return m
 
 
 async def seed(registry, chat_id=1, n=3):
@@ -170,3 +177,89 @@ class TestVacation:
         members = await registry.get_members(1)
         assert members[0].vacation_until == "2026-08-06"
         assert members[1].vacation_until is None
+
+
+class TestVacationStart:
+    async def test_vacation_start_column_exists_on_fresh_db(self, registry):
+        """Given a freshly initialized registry, daily_members has vacation_start."""
+        async with registry._db.execute("PRAGMA table_info(daily_members)") as cursor:
+            cols = [row[1] for row in await cursor.fetchall()]
+        assert "vacation_start" in cols
+
+    async def test_add_get_vacation_start_roundtrip(self, registry):
+        await registry.add_member(
+            member(1, 0, "Иван", user_id=100, vacation_until="2026-08-10", vacation_start="2026-08-01")
+        )
+        members = await registry.get_members(1)
+        assert members[0].vacation_until == "2026-08-10"
+        assert members[0].vacation_start == "2026-08-01"
+
+    async def test_update_member_vacation_sets_both_fields(self, registry):
+        await registry.add_member(member(1, 0, "Иван", user_id=100))
+        await registry.update_member_vacation(1, 0, "2026-08-10", "2026-08-01")
+        members = await registry.get_members(1)
+        assert members[0].vacation_until == "2026-08-10"
+        assert members[0].vacation_start == "2026-08-01"
+
+    async def test_update_member_vacation_clears_both_fields(self, registry):
+        await registry.add_member(
+            member(1, 0, "Иван", user_id=100, vacation_until="2026-08-10", vacation_start="2026-08-01")
+        )
+        await registry.update_member_vacation(1, 0, None, None)
+        members = await registry.get_members(1)
+        assert members[0].vacation_until is None
+        assert members[0].vacation_start is None
+
+    async def test_update_member_vacation_three_args_backward_compat(self, registry):
+        await registry.add_member(member(1, 0, "Иван", user_id=100))
+        await registry.update_member_vacation(1, 0, "2026-08-05")
+        members = await registry.get_members(1)
+        assert members[0].vacation_until == "2026-08-05"
+        assert members[0].vacation_start is None
+
+    async def test_replace_members_preserves_vacation_start(self, registry):
+        await registry.add_member(member(1, 0, "A", user_id=1, vacation_start="2026-08-01"))
+        await registry.replace_members(1, [member(1, 0, "A", user_id=1, vacation_start="2026-08-02")])
+        members = await registry.get_members(1)
+        assert members[0].vacation_start == "2026-08-02"
+
+
+class TestSwapScheduleDates:
+    BASE = datetime.date(2026, 8, 4)
+
+    async def test_swap_exchanges_two_positions_only(self, registry):
+        d0, d1, d2 = (
+            self.BASE,
+            self.BASE + datetime.timedelta(days=1),
+            self.BASE + datetime.timedelta(days=2),
+        )
+        await registry.set_schedule(1, [(str(d0), 0), (str(d1), 1), (str(d2), 2)])
+        await registry.swap_schedule_dates(1, str(d0), str(d1))
+        schedule = await registry.get_schedule(1)
+        assert schedule[str(d0)] == 1
+        assert schedule[str(d1)] == 0
+        assert schedule[str(d2)] == 2
+        assert len(schedule) == 3
+
+    async def test_swap_with_missing_date_is_noop(self, registry):
+        d0, d1, d2 = (
+            self.BASE,
+            self.BASE + datetime.timedelta(days=1),
+            self.BASE + datetime.timedelta(days=2),
+        )
+        rows = [(str(d0), 0), (str(d1), 1), (str(d2), 2)]
+        await registry.set_schedule(1, rows)
+        await registry.swap_schedule_dates(1, str(d0), "2030-01-01")
+        assert await registry.get_schedule(1) == dict(rows)
+
+    async def test_double_swap_restores_original(self, registry):
+        d0, d1, d2 = (
+            self.BASE,
+            self.BASE + datetime.timedelta(days=1),
+            self.BASE + datetime.timedelta(days=2),
+        )
+        rows = [(str(d0), 0), (str(d1), 1), (str(d2), 2)]
+        await registry.set_schedule(1, rows)
+        await registry.swap_schedule_dates(1, str(d0), str(d1))
+        await registry.swap_schedule_dates(1, str(d0), str(d1))
+        assert await registry.get_schedule(1) == dict(rows)
