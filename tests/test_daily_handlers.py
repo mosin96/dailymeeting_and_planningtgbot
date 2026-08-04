@@ -37,6 +37,10 @@ def today_str():
     return datetime.datetime.now(TZ).strftime("%Y-%m-%d")
 
 
+def tomorrow_str():
+    return (datetime.datetime.now(TZ) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 @pytest.fixture
 async def storage(tmp_path):
     db = tmp_path / "daily.db"
@@ -80,16 +84,33 @@ async def test_substitute_button_today_b_tomorrow_a(dp, bot, session, storage):
     assert len(edits) == 1
     assert "Сегодня ведёт @b, завтра @a" in edits[0]["text"]
 
+    # KEY INVERSION vs the old list-swap: members order NEVER changes
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["B", "A", "C"]
+    assert [m.first_name for m in members] == ["A", "B", "C"]
+    assert [m.position for m in members] == [0, 1, 2]
+    # only the schedule rows swap: today -> B (1), tomorrow -> A (0)
+    schedule = await storage.get_schedule(-1001)
+    assert schedule[today_str()] == 1
+    assert schedule[tomorrow_str()] == 0
+    chat = await storage.get_chat(-1001)
+    assert chat.next_index == 1  # b_pos: B leads today
 
 
 @pytest.mark.asyncio
 async def test_substitute_button_with_stale_next_index(dp, bot, session, storage):
-    """Robustness: even if next_index is stale (1 instead of the leader's 0),
-    the button payload (leader's position) still swaps A<->B, and next_index
-    stays put so A leads tomorrow."""
-    await seed(storage, last_reminder_date=today_str(), next_index=1)
+    """Robustness: the swap reads the schedule dates, not chat.next_index.
+    next_index is stale (1, past the announced leader A) while the schedule
+    says A leads today; the substitute still swaps today(A)<->tomorrow(B)."""
+    await seed(storage, last_reminder_date=today_str(), next_index=0)
+    rows = [
+        ((datetime.date.fromisoformat(today_str()) + datetime.timedelta(days=i)).isoformat(), i % 3)
+        for i in range(15)
+    ]
+    await storage.set_schedule(-1001, rows)  # today -> 0 (A), tomorrow -> 1 (B)
+    chat = await storage.get_chat(-1001)
+    chat.next_index = 1  # stale: points past A
+    await storage.upsert_chat(chat)
+
     msg = make_message("original")
     cb = make_callback(msg, "daily:sub:0", user_id=2)  # anyone can press
     await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
@@ -99,14 +120,17 @@ async def test_substitute_button_with_stale_next_index(dp, bot, session, storage
     assert "Сегодня ведёт @b, завтра @a" in edits[0]["text"]
 
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["B", "A", "C"]
+    assert [m.first_name for m in members] == ["A", "B", "C"]
     chat = await storage.get_chat(-1001)
-    assert chat.next_index == 1  # tomorrow A (position 1)
+    assert chat.next_index == 1  # b_pos: B leads today
+    schedule = await storage.get_schedule(-1001)
+    assert schedule[today_str()] == 1
+    assert schedule[tomorrow_str()] == 0
 
 
 @pytest.mark.asyncio
 async def test_substitute_command_with_reminder_sent(dp, bot, session, storage):
-    """Regression: /substitute substitutes today's leader (A, at next_index),
+    """Regression: /substitute substitutes today's leader (A, schedule[today]),
     even after the morning tag was already sent today."""
     await seed(storage, last_reminder_date=today_str(), next_index=0)
     msg = make_message("/substitute")
@@ -116,7 +140,10 @@ async def test_substitute_command_with_reminder_sent(dp, bot, session, storage):
     assert len(sends) == 1
     assert "Сегодня ведёт @b, завтра @a" in sends[0]["text"]
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["B", "A", "C"]
+    assert [m.first_name for m in members] == ["A", "B", "C"]
+    schedule = await storage.get_schedule(-1001)
+    assert schedule[today_str()] == 1
+    assert schedule[tomorrow_str()] == 0
 
 
 @pytest.mark.asyncio
@@ -156,15 +183,17 @@ async def test_substitute_button_works_without_reminder_fired(dp, bot, session, 
 
 @pytest.mark.asyncio
 async def test_substitute_single_member_rejected(dp, bot, session, storage):
+    """Single-member team: schedule[today] == schedule[tomorrow] (both 0)
+    -> a_pos == b_pos -> error surfaces via the callback answer, not an edit."""
     await storage.upsert_chat(DailyChat(chat_id=-1001, last_reminder_date=today_str()))
     await storage.add_member(DailyMember(chat_id=-1001, position=0, first_name="Solo", user_id=1))
     msg = make_message("original")
     cb = make_callback(msg, "daily:sub:0")
     await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
 
-    edits = [p for m, p in session.calls if m == "editMessageText"]
-    assert len(edits) == 1
-    assert "Некого подменять" in edits[0]["text"]
+    answers = [p for m, p in session.calls if m == "answerCallbackQuery"]
+    assert any("Некого подменять" in (a.get("text") or "") for a in answers)
+    assert not [p for m, p in session.calls if m == "editMessageText"]
 
 
 @pytest.mark.asyncio
@@ -273,7 +302,13 @@ async def test_substitute_command(dp, bot, session, storage):
     assert len(sends) == 1
     assert "Сегодня ведёт @b, завтра @a" in sends[0]["text"]
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["B", "A", "C"]
+    assert [m.first_name for m in members] == ["A", "B", "C"]
+    assert [m.position for m in members] == [0, 1, 2]
+    chat = await storage.get_chat(-1001)
+    assert chat.next_index == 1  # b_pos: B leads today
+    schedule = await storage.get_schedule(-1001)
+    assert schedule[today_str()] == 1
+    assert schedule[tomorrow_str()] == 0
 
 
 @pytest.mark.asyncio
@@ -368,8 +403,13 @@ async def test_substitute_button_works_for_user_id_none_members(dp, bot, session
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
     assert "Сегодня ведёт @Никита, завтра @testuser" in edits[0]["text"]
+    # member order unchanged; schedule rows swapped (position-driven, works
+    # for user_id=None members)
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["Никита", "testuser"]
+    assert [m.first_name for m in members] == ["testuser", "Никита"]
+    schedule = await storage.get_schedule(-1001)
+    assert schedule[today_str()] == 1
+    assert schedule[tomorrow_str()] == 0
 
 
 @pytest.mark.asyncio

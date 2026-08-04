@@ -1,6 +1,7 @@
 """Daily standup chat handlers: reminder buttons, /daily, /team, /time, /who, /substitute."""
 from __future__ import annotations
 
+import datetime
 import re
 from typing import List, Optional
 
@@ -233,29 +234,35 @@ def create_router() -> Router:
         if leader is None:
             await message.answer("Все пропущены сегодня")
             return
-        new_members, new_next, msg = apply_substitute(
-            members, chat.next_index, leader.position, str(today)
-        )
-        await daily.replace_members(message.chat.id, new_members)
-        chat.next_index = new_next
+        tomorrow = str(today + datetime.timedelta(days=1))
+        b_pos, a_pos, msg, err = apply_substitute(schedule, members, str(today), tomorrow)
+        if err is not None:
+            await message.answer(err)
+            return
+        await daily.swap_schedule_dates(message.chat.id, str(today), tomorrow)
+        chat.next_index = b_pos
         await daily.upsert_chat(chat)
-        await _refresh_schedule(daily, message.chat.id, tz)
-        await message.answer(msg or "Подмена выполнена")
+        await message.answer(msg)
 
     @r.callback_query(F.data.regexp(r"^{}(\d+)$".format(PREFIX_SUB)))
     async def substitute_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
-        position = int(callback.data[len(PREFIX_SUB):])
         chat = await daily.get_chat(callback.message.chat.id)
         members = await daily.get_members(callback.message.chat.id)
-        today = str(today_in_tz(tz))
-        if chat is None or not members:
+        if not members:
             await callback.answer("Команда пуста")
             return
-        new_members, new_next, msg = apply_substitute(members, chat.next_index, position, today)
-        await daily.replace_members(callback.message.chat.id, new_members)
-        chat.next_index = new_next
+        if chat is None:
+            chat = DailyChat(chat_id=callback.message.chat.id)
+        today = today_in_tz(tz)
+        schedule = await _ensure_today_schedule(daily, chat, members, today)
+        tomorrow = str(today + datetime.timedelta(days=1))
+        b_pos, a_pos, msg, err = apply_substitute(schedule, members, str(today), tomorrow)
+        if err is not None:
+            await callback.answer(err)
+            return
+        await daily.swap_schedule_dates(callback.message.chat.id, str(today), tomorrow)
+        chat.next_index = b_pos
         await daily.upsert_chat(chat)
-        await _refresh_schedule(daily, callback.message.chat.id, tz)
         await callback.message.edit_text(msg)
         await callback.answer()
 

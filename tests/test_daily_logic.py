@@ -60,76 +60,134 @@ def test_advance_next_wraps():
 
 
 def test_substitute_swap_today_b_tomorrow_a():
-    """User scenario: today A leads (next_index=0), A asks B to substitute.
-    Result: today B leads, tomorrow A leads. Queue becomes [B, A, C]."""
+    """User scenario: today A leads (schedule[today]=0), B leads tomorrow
+    (schedule[tomorrow]=1), A asks B to substitute. Result: today B leads,
+    tomorrow A leads. Members list order NEVER changes — only schedule rows."""
     m = [
         member(0, "A", user_id=1),
         member(1, "B", user_id=2),
         member(2, "C", user_id=3),
     ]
-    new_members, new_next, msg = apply_substitute(m, 0, 0, "2026-08-03")
-    assert names(new_members) == ["B", "A", "C"]
-    assert new_next == 0  # next_index does not move on substitute
+    schedule = {"2026-08-03": 0, "2026-08-04": 1, "2026-08-05": 2}
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err is None
+    assert b_pos == 1  # tomorrow's scheduled leader leads today
+    assert a_pos == 0  # today's leader leads tomorrow
     assert msg == "Сегодня ведёт B, завтра A"
-
-    # today B leads
-    assert new_members[0].first_name == "B"
-    # tomorrow: advance from A's slot (position 1) -> index 2 -> wraps... 
-    # Wait: next_index stays 0, which now points at position 0 = B (today).
-    # After today's reminder, scheduler advances next_index past B -> 1 = A.
-    # Simulate the scheduler's post-reminder advance:
-    leader_today = new_members[0]
-    assert leader_today.first_name == "B"
-    next_for_tomorrow = advance_next(new_members, leader_today.position)
-    assert next_for_tomorrow == 1
-    assert new_members[next_for_tomorrow].first_name == "A"
+    # guardrail: member list order and positions untouched
+    assert names(m) == ["A", "B", "C"]
+    assert [x.position for x in m] == [0, 1, 2]
 
 
 def test_substitute_with_stale_next_index():
-    """Robustness: apply_substitute uses the leader POSITION from the button
-    payload, so a stale next_index (1, pointing past A) does not misroute the
-    swap: A<->B happen, next_index stays 1 (now A's slot) -> tomorrow A leads."""
+    """The pure function has NO next_index parameter — a stale next_index in
+    the chat row cannot misroute the swap, which reads A and B solely from
+    the schedule dates."""
     m = [
         member(0, "A", user_id=1),
         member(1, "B", user_id=2),
         member(2, "C", user_id=3),
     ]
-    new_members, new_next, msg = apply_substitute(m, 1, 0, "2026-08-03")
-    assert names(new_members) == ["B", "A", "C"]
-    assert new_next == 1  # stays; position 1 is A -> tomorrow A leads
+    schedule = {"2026-08-03": 0, "2026-08-04": 1, "2026-08-05": 2}
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err is None
+    assert (b_pos, a_pos) == (1, 0)
     assert msg == "Сегодня ведёт B, завтра A"
-    leader_tomorrow = next_leader(new_members, new_next, "2026-08-04")
-    assert leader_tomorrow.first_name == "A"
 
 
 def test_substitute_wraps_to_first():
+    """Wrap-around: today's leader is C (position 2), tomorrow's scheduled
+    leader is A (position 0) -> after the swap today A leads, tomorrow C."""
     m = [
         member(0, "A", user_id=1),
         member(1, "B", user_id=2),
         member(2, "C", user_id=3),
     ]
-    # next_index=2 -> leader is C (position 2); next non-skipped after C is A (wraps)
-    new_members, new_next, msg = apply_substitute(m, 2, 2, "2026-08-03")
-    assert names(new_members) == ["C", "B", "A"]
+    schedule = {"2026-08-03": 2, "2026-08-04": 0, "2026-08-05": 1}
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err is None
+    assert b_pos == 0
+    assert a_pos == 2
     assert msg == "Сегодня ведёт A, завтра C"
+    assert names(m) == ["A", "B", "C"]
+    assert [x.position for x in m] == [0, 1, 2]
 
 
 def test_substitute_skips_skipped_members():
+    """B (tomorrow's scheduled leader) has skip_date == today -> cannot
+    substitute, error. Members list untouched."""
     m = [
         member(0, "A", user_id=1),
         member(1, "B", user_id=2, skip_date="2026-08-03"),
         member(2, "C", user_id=3),
     ]
-    new_members, new_next, msg = apply_substitute(m, 0, 0, "2026-08-03")
-    # next non-skipped after A(0) is C(2)
-    assert names(new_members) == ["C", "B", "A"]
-    assert msg == "Сегодня ведёт C, завтра A"
+    schedule = {"2026-08-03": 0, "2026-08-04": 1, "2026-08-05": 2}
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err == "Некого подменять"
+    assert (b_pos, a_pos, msg) == (None, None, None)
+    assert names(m) == ["A", "B", "C"]
+    assert [x.position for x in m] == [0, 1, 2]
 
 
 def test_substitute_single_member_error():
+    """Single-member team: schedule[today] == schedule[tomorrow] (both 0)
+    -> a_pos == b_pos -> error."""
     m = [member(0, "A", user_id=1)]
-    _, _, msg = apply_substitute(m, 0, 0, "2026-08-03")
-    assert msg == "Некого подменять"
+    schedule = {"2026-08-03": 0, "2026-08-04": 0}
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err == "Некого подменять"
+    assert (b_pos, a_pos, msg) == (None, None, None)
+
+
+def test_substitute_tomorrow_row_missing_error():
+    m = [member(0, "A", user_id=1), member(1, "B", user_id=2)]
+    schedule = {"2026-08-03": 0}  # no tomorrow row in the window
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err == "Некого подменять"
+    assert (b_pos, a_pos, msg) == (None, None, None)
+
+
+def test_substitute_today_row_none_error():
+    m = [member(0, "A", user_id=1), member(1, "B", user_id=2)]
+    schedule = {"2026-08-03": None, "2026-08-04": 1}
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err == "Все пропущены сегодня, некого подменять"
+    assert (b_pos, a_pos, msg) == (None, None, None)
+
+
+def test_substitute_empty_team_error():
+    b_pos, a_pos, msg, err = apply_substitute({}, [], "2026-08-03", "2026-08-04")
+    assert err == "Команда пуста"
+    assert (b_pos, a_pos, msg) == (None, None, None)
+
+
+def test_substitute_guardrail_members_never_reordered():
+    """Guardrail: after a successful substitute the members list is
+    untouched — same object identity, same order, same positions."""
+    m = [
+        member(0, "A", user_id=1),
+        member(1, "B", user_id=2),
+        member(2, "C", user_id=3),
+    ]
+    before = [x for x in m]
+    schedule = {"2026-08-03": 0, "2026-08-04": 1, "2026-08-05": 2}
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err is None
+    assert [x.first_name for x in m] == ["A", "B", "C"]
+    assert [x.position for x in m] == [0, 1, 2]
+    assert all(a is b for a, b in zip(m, before))
+
+
+def test_substitute_message_uses_display_name():
+    m = [
+        member(0, "Алиса", user_id=1, username="alice"),
+        member(1, "Боб", user_id=2, username="bob"),
+    ]
+    schedule = {"2026-08-03": 0, "2026-08-04": 1}
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err is None
+    assert (b_pos, a_pos) == (1, 0)
+    assert msg == "Сегодня ведёт @bob, завтра @alice"
 
 
 def test_skip_marks_and_repicks_leader():
@@ -365,15 +423,19 @@ def test_vacationer_returns_before_today_leader_available():
 
 
 def test_substitute_skips_vacationer_as_b():
+    """B (tomorrow's scheduled leader) is on vacation covering today ->
+    cannot substitute, error. Members list untouched."""
     m = [
         member(0, "A", user_id=1),
         member(1, "B", user_id=2, vacation_until="2026-08-03"),
         member(2, "C", user_id=3),
     ]
-    new_members, _, msg = apply_substitute(m, 0, 0, "2026-08-03")
-    # next available after A(0) is C(2)
-    assert [x.first_name for x in new_members] == ["C", "B", "A"]
-    assert msg == "Сегодня ведёт C, завтра A"
+    schedule = {"2026-08-03": 0, "2026-08-04": 1, "2026-08-05": 2}
+    b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
+    assert err == "Некого подменять"
+    assert (b_pos, a_pos, msg) == (None, None, None)
+    assert names(m) == ["A", "B", "C"]
+    assert [x.position for x in m] == [0, 1, 2]
 
 
 def test_skip_repick_skips_vacationer():

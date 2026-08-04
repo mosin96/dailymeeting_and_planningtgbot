@@ -5,7 +5,7 @@ import datetime
 import re
 from dataclasses import dataclass
 from html import escape
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 VACATION_DATE_RE = re.compile(r"(\d{1,2})[./](\d{1,2})[./](\d{4})")
 ISO_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -232,65 +232,50 @@ def set_leader(
 
 
 def apply_substitute(
+    schedule: Dict[str, Optional[int]],
     members: List[DailyMember],
-    next_index: int,
-    leader_pos: int,
     today: str,
-) -> Tuple[List[DailyMember], int, Optional[str]]:
-    """Substitute A (today's leader) with B = next non-skipped member after A.
+    tomorrow: str,
+) -> Tuple[Optional[int], Optional[int], Optional[str], Optional[str]]:
+    """Plan a substitute: today's scheduled leader (A) yields to tomorrow's
+    scheduled leader (B) by swapping the today/tomorrow schedule rows.
 
-    Semantics agreed with the user: swap positions A and B in the queue.
-    Today B leads (slot A), tomorrow A leads (after advance). next_index
-    does NOT move here: it already points at (A_pos + 1), which after the
-    swap is A's position — so tomorrow A is picked.
+    The schedule is the single source of truth: A = schedule[today],
+    B = schedule[tomorrow]. After the swap (the caller persists it via
+    swap_schedule_dates), today's leader is B and tomorrow's is A.
+    `members` order NEVER changes — positions stay 0..n-1.
 
-    A is identified by its POSITION (the payload of the substitute button /
-    the announced leader). Position is the stable rotation identity that works
-    even for members added by @username who have user_id=None (a user_id-based
-    lookup would miss them, and next_leader(members, next_index) would return
-    the NEXT leader (B) after the scheduler advanced next_index past A).
+    Guards (in order): empty team; no today row (all skipped today); no
+    tomorrow row; today and tomorrow scheduled the same member (covers
+    n==1 teams); B unavailable today (skip_date == today or vacation
+    covering today) — a substitute must be able to lead today.
 
-    Returns (new members, new next_index, error_message|None).
+    Returns (b_pos, a_pos, message, error). On success error is None and
+    message is "Сегодня ведёт {B}, завтра {A}" (display names). On failure
+    returns (None, None, None, error_message).
     """
-    n = len(members)
-    if n == 0:
-        return members, next_index, "Команда пуста"
-    if n == 1:
-        return members, next_index, "Некого подменять"
-
-    leader = None
-    for member in members:
-        if member.position == leader_pos:
-            leader = member
-            break
-    if leader is None:
-        leader = next_leader(members, next_index, today)
-    if leader is None:
-        return members, next_index, "Все пропущены сегодня, некого подменять"
-    if leader.is_unavailable(today):
-        return members, next_index, "Подмена доступна для сегодняшнего ведущего"
-
-    a_pos = leader.position
-    # B = next available member strictly after A (cyclic)
-    b_member = None
-    for offset in range(1, n):
-        cand = members[(a_pos + offset) % n]
-        if not cand.is_unavailable(today):
-            b_member = cand
-            break
-    if b_member is None:
-        return members, next_index, "Некого подменять"
-
-    b_pos = b_member.position
-    new_members = [m for m in members]
-    new_members[a_pos], new_members[b_pos] = new_members[b_pos], new_members[a_pos]
-    # fix positions
-    new_members[a_pos].position = a_pos
-    new_members[b_pos].position = b_pos
-
-    b_name = b_member.display_name
-    a_name = leader.display_name
-    return new_members, next_index, "Сегодня ведёт {}, завтра {}".format(b_name, a_name)
+    if not members:
+        return None, None, None, "Команда пуста"
+    a_pos = schedule.get(today)
+    if a_pos is None:
+        return None, None, None, "Все пропущены сегодня, некого подменять"
+    b_pos = schedule.get(tomorrow)
+    if b_pos is None:
+        return None, None, None, "Некого подменять"
+    if a_pos == b_pos:
+        return None, None, None, "Некого подменять"
+    b_member = next((m for m in members if m.position == b_pos), None)
+    if b_member is None or b_member.is_unavailable(today):
+        return None, None, None, "Некого подменять"
+    a_member = next((m for m in members if m.position == a_pos), None)
+    if a_member is None:
+        return None, None, None, "Некого подменять"
+    return (
+        b_pos,
+        a_pos,
+        "Сегодня ведёт {}, завтра {}".format(b_member.display_name, a_member.display_name),
+        None,
+    )
 
 
 def apply_skip(
