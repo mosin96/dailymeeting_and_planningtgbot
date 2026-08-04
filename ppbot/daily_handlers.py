@@ -17,7 +17,7 @@ from ppbot.daily import (
     apply_skip,
     apply_substitute,
     format_ru_date,
-    parse_vacation_date,
+    parse_vacation_range,
     set_leader,
     today_in_tz,
 )
@@ -403,7 +403,7 @@ def create_router() -> Router:
         position = int(callback.data[len(PREFIX_VAC):])
         await state.set_state(SetVacation.waiting)
         await state.update_data(vacation_position=position)
-        await callback.message.answer("До какой даты отпуск? (ДД.ММ.ГГГГ, «снять» — убрать)")
+        await callback.message.answer("До какой даты отпуск? (ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ, «снять» — убрать)")
         await callback.answer()
 
     @r.message(Command("vacation"))
@@ -432,24 +432,34 @@ def create_router() -> Router:
             await message.answer("Не нашёл участника. Напишите /vacation @ник ДД.ММ.ГГГГ или ответьте на сообщение")
             return
         if date_part in ("снять", "нет", "0"):
-            await daily.update_member_vacation(message.chat.id, member.position, None)
+            await daily.update_member_vacation(message.chat.id, member.position, None, None)
             await _refresh_schedule(daily, message.chat.id, tz)
             await message.answer("{} вернулся в ротацию".format(member.display_name))
             return
         if date_part:
-            iso = parse_vacation_date(date_part)
-            if iso is None:
-                await message.answer("Неверный формат даты. Пришлите ДД.ММ.ГГГГ")
+            parsed = parse_vacation_range(date_part)
+            if parsed is None:
+                await message.answer(
+                    "Неверный формат даты. Пришлите ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ"
+                )
                 return
-            await daily.update_member_vacation(message.chat.id, member.position, iso)
+            start, end = parsed
+            await daily.update_member_vacation(message.chat.id, member.position, end, start)
             await _refresh_schedule(daily, message.chat.id, tz)
-            await message.answer(
-                "{} в отпуске до {}".format(member.display_name, format_ru_date(iso))
-            )
+            if start is None:
+                await message.answer(
+                    "{} в отпуске до {}".format(member.display_name, format_ru_date(end))
+                )
+            else:
+                await message.answer(
+                    "{} в отпуске с {} по {}".format(
+                        member.display_name, format_ru_date(start), format_ru_date(end)
+                    )
+                )
             return
         await state.set_state(SetVacation.waiting)
         await state.update_data(vacation_position=member.position)
-        await message.answer("До какой даты отпуск? (ДД.ММ.ГГГГ, «снять» — убрать)")
+        await message.answer("До какой даты отпуск? (ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ, «снять» — убрать)")
 
     @r.message(SetVacation.waiting)
     async def vacation_input(message: Message, state: FSMContext, daily: DailyRegistry, tz):
@@ -463,20 +473,30 @@ def create_router() -> Router:
             await state.clear()
             return
         if text in ("снять", "нет", "0"):
-            await daily.update_member_vacation(message.chat.id, member.position, None)
+            await daily.update_member_vacation(message.chat.id, member.position, None, None)
             await _refresh_schedule(daily, message.chat.id, tz)
             await message.answer("{} вернулся в ротацию".format(member.display_name))
             await state.clear()
             return
-        iso = parse_vacation_date(text)
-        if iso is None:
-            await message.answer("Неверный формат даты. Пришлите ДД.ММ.ГГГГ или «снять»")
+        parsed = parse_vacation_range(text)
+        if parsed is None:
+            await message.answer(
+                "Неверный формат даты. Пришлите ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ"
+            )
             return
-        await daily.update_member_vacation(message.chat.id, member.position, iso)
+        start, end = parsed
+        await daily.update_member_vacation(message.chat.id, member.position, end, start)
         await _refresh_schedule(daily, message.chat.id, tz)
-        await message.answer(
-            "{} в отпуске до {}".format(member.display_name, format_ru_date(iso))
-        )
+        if start is None:
+            await message.answer(
+                "{} в отпуске до {}".format(member.display_name, format_ru_date(end))
+            )
+        else:
+            await message.answer(
+                "{} в отпуске с {} по {}".format(
+                    member.display_name, format_ru_date(start), format_ru_date(end)
+                )
+            )
         await state.clear()
 
     return r

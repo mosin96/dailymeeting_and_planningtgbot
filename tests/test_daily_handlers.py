@@ -664,9 +664,23 @@ async def test_vacation_command_by_reply(dp, bot, session, storage):
 
 
 @pytest.mark.asyncio
+async def test_vacation_command_sets_range(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("/vacation @b 01.08.2026-10.08.2026")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    assert "@b в отпуске с 01.08.2026 по 10.08.2026" in sends[0]["text"]
+    members = await storage.get_members(-1001)
+    assert members[1].vacation_start == "2026-08-01"
+    assert members[1].vacation_until == "2026-08-10"
+
+
+@pytest.mark.asyncio
 async def test_vacation_command_clear(dp, bot, session, storage):
     await seed(storage)
-    await storage.update_member_vacation(-1001, 1, "2026-08-05")
+    await storage.update_member_vacation(-1001, 1, "2026-08-05", "2026-08-01")
     msg = make_message("/vacation @b снять")
     await feed(dp, bot, storage, Update(update_id=1, message=msg))
 
@@ -675,6 +689,7 @@ async def test_vacation_command_clear(dp, bot, session, storage):
     assert "@b вернулся в ротацию" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert members[1].vacation_until is None
+    assert members[1].vacation_start is None
 
 
 @pytest.mark.asyncio
@@ -687,6 +702,20 @@ async def test_vacation_command_invalid_date_rejected(dp, bot, session, storage)
     assert len(sends) == 1
     assert "Неверный формат даты" in sends[0]["text"]
     members = await storage.get_members(-1001)
+    assert members[1].vacation_until is None
+
+
+@pytest.mark.asyncio
+async def test_vacation_command_inverted_range_rejected(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("/vacation @b 10.08.2026-01.08.2026")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    assert "Неверный формат даты" in sends[0]["text"]
+    members = await storage.get_members(-1001)
+    assert members[1].vacation_start is None
     assert members[1].vacation_until is None
 
 
@@ -742,6 +771,29 @@ async def test_vacation_fsm_invalid_then_valid(dp, bot, session, storage):
     assert any("@b в отпуске до 06.08.2026" in s.get("text", "") for s in sends)
     members = await storage.get_members(-1001)
     assert members[1].vacation_until == "2026-08-06"
+
+
+@pytest.mark.asyncio
+async def test_vacation_fsm_sets_range(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("/vacation @b")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+    session.calls.clear()
+
+    msg2 = make_message("01.08.2026-10.08.2026")
+    await feed(dp, bot, storage, Update(update_id=2, message=msg2))
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    assert "@b в отпуске с 01.08.2026 по 10.08.2026" in sends[0]["text"]
+    members = await storage.get_members(-1001)
+    assert members[1].vacation_start == "2026-08-01"
+    assert members[1].vacation_until == "2026-08-10"
+
+    # FSM state cleared: a follow-up plain message is not consumed as a date
+    session.calls.clear()
+    msg3 = make_message("hello")
+    await feed(dp, bot, storage, Update(update_id=3, message=msg3))
+    assert [p for m, p in session.calls if m == "sendMessage"] == []
 
 
 @pytest.mark.asyncio
