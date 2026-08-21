@@ -141,12 +141,21 @@ async def show_menu(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
     schedule = await _ensure_today_schedule(daily, chat, members, today)
     leader = await _schedule_leader(schedule, members, str(today))
     leader_str = leader.display_name if leader else "—"
+    vacationers = [m for m in members if m.is_on_vacation(str(today))]
+    available = len(members) - len(vacationers)
+    count_str = "{} из {}".format(available, len(members)) if vacationers else str(available)
     text = (
         "📋 Дейлик\n"
         "🕙 Время: {time}\n"
         "👥 Участников: {count}\n"
-        "👤 Сегодня ведёт: {leader}"
-    ).format(time=chat.daily_time, count=len(members), leader=leader_str)
+    ).format(time=chat.daily_time, count=count_str)
+    if vacationers:
+        parts = ", ".join(
+            "{} (до {})".format(m.plain_name, format_ru_date(m.vacation_until))
+            for m in vacationers
+        )
+        text += "В отпуске: {}\n".format(parts)
+    text += "👤 Сегодня ведёт: {leader}".format(leader=leader_str)
     if edit:
         await message.edit_text(text, reply_markup=build_menu_markup())
     else:

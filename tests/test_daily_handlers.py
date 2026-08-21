@@ -323,6 +323,24 @@ async def test_daily_menu_smoke(dp, bot, session, storage):
 
 
 @pytest.mark.asyncio
+async def test_daily_menu_counts_out_vacationers(dp, bot, session, storage):
+    """Regression: /daily menu must show TODAY's composition - a member on
+    vacation is counted out of the headcount and listed separately."""
+    await seed(storage)
+    until_dt = datetime.datetime.now(TZ) + datetime.timedelta(days=5)
+    await storage.update_member_vacation(-1001, 1, until_dt.strftime("%Y-%m-%d"))
+    msg = make_message("/daily")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    text = sends[0]["text"]
+    assert "Участников: 2 из 3" in text
+    assert "В отпуске: B (до {})".format(until_dt.strftime("%d.%m.%Y")) in text
+    assert "Сегодня ведёт:" in text
+
+
+@pytest.mark.asyncio
 async def test_time_command_valid_and_invalid(dp, bot, session, storage):
     await seed(storage)
     # start FSM
