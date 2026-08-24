@@ -28,7 +28,7 @@ The bot reminds the team who leads today's daily standup. Configuration is per c
 | `/daily` | Main menu (status + quick actions) |
 | `/team` | Team members: add (by reply or @username), remove |
 | `/time` | Set daily standup time (HH:MM) |
-| `/who` | Who leads today |
+| `/who` | Who leads today (on a non-working day — «нерабочий день» + ближайший дейлик) |
 | `/substitute` | Substitute today's leader |
 | `/setleader @ник` | Manually set today's leader (or reply to a member's message) |
 | `/vacation @ник ДД.ММ.ГГГГ-ДД.ММ.ГГГГ` | Отпуск с даты по дату (или ДД.ММ.ГГГГ — до даты; «снять» — убрать) |
@@ -36,8 +36,10 @@ The bot reminds the team who leads today's daily standup. Configuration is per c
 
 The "who leads today" reminder message contains two buttons available to any chat member:
 
-- **«Подмените меня»** — today's scheduled leader and tomorrow's scheduled leader swap places in the schedule for these two days (the member order in the team list is not changed).
+- **«Подмените меня»** — today's scheduled leader and the scheduled leader of the next working day (следующего РАБОЧЕГО дня) swap places in the schedule for these two days (the member order in the team list is not changed).
 - **«Пропуск»** — one-time skip without substitution (the position in the rotation stays the same).
+
+Ротация сдвигается только в рабочие дни (производственный календарь РФ, isdayoff.ru; при недоступности API — Пн–Пт). Выходные и праздники не занимают слот.
 
 The `/daily` menu also has two quick-action buttons:
 
