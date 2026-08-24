@@ -346,14 +346,12 @@ class DailyRegistry:
         target_s = str(target)
         if target_s not in schedule:
             last_date = max(schedule)
-            last_pos = schedule[last_date]
             n = len(members)
             if n == 0:
                 cursor = 0
-            elif last_pos is None:
-                cursor = chat.next_index % n
             else:
-                cursor = (last_pos + 1) % n
+                assigned = [(d, pos) for d, pos in schedule.items() if pos is not None]
+                cursor = (max(assigned)[1] + 1) % n if assigned else chat.next_index % n
             start = datetime.date.fromisoformat(last_date) + datetime.timedelta(days=1)
             days = (target - start).days + 1
             rows = await build_schedule(members, start, cursor, days, workdays=workdays)

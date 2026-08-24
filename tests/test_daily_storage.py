@@ -40,6 +40,10 @@ async def seed(registry, chat_id=1, n=3):
         )
 
 
+async def mon_fri(date):
+    return date.weekday() < 5
+
+
 class TestChats:
     async def test_upsert_get_roundtrip(self, registry):
         chat = DailyChat(chat_id=1, daily_time="09:15", next_index=2, last_reminder_date="2026-08-03")
@@ -263,3 +267,47 @@ class TestSwapScheduleDates:
         await registry.swap_schedule_dates(1, str(d0), str(d1))
         await registry.swap_schedule_dates(1, str(d0), str(d1))
         assert await registry.get_schedule(1) == dict(rows)
+
+
+class TestEnsureScheduleExtension:
+    """Extension cursor must continue from the last ASSIGNED leader, not from
+    the stale next_index pointer (which names today's leader)."""
+
+    async def test_ensure_schedule_extension_continues_after_weekend_tail(self, registry):
+        await registry.upsert_chat(DailyChat(chat_id=1, daily_time="10:00", next_index=0))
+        await seed(registry)
+        members = await registry.get_members(1)
+        chat = await registry.get_chat(1)
+        await registry.ensure_schedule(chat, members, datetime.date(2026, 8, 3), workdays=mon_fri)
+        # the loop ticks daily incl. weekends; the Sat tick leaves the window tail on None rows
+        await registry.ensure_schedule(chat, members, datetime.date(2026, 8, 15), workdays=mon_fri)
+        await registry.ensure_schedule(chat, members, datetime.date(2026, 8, 17), workdays=mon_fri)
+
+        schedule = await registry.get_schedule(1)
+        d = datetime.date(2026, 8, 17)
+        while d <= datetime.date(2026, 8, 31):
+            if d.weekday() < 5:
+                assert schedule[str(d)] is not None, str(d)
+            else:
+                assert schedule[str(d)] is None, str(d)
+            d += datetime.timedelta(days=1)
+        assert schedule["2026-08-17"] == (schedule["2026-08-14"] + 1) % 3
+        seq = [pos for _, pos in sorted(schedule.items()) if pos is not None]
+        for prev, cur in zip(seq, seq[1:]):
+            assert cur == (prev + 1) % 3
+
+    async def test_ensure_schedule_extension_all_none_falls_back_to_next_index(self, registry):
+        await registry.upsert_chat(DailyChat(chat_id=1, daily_time="10:00", next_index=2))
+        await seed(registry)
+        for i in range(3):
+            await registry.update_member_vacation(1, i, "2027-01-01")
+        members = await registry.get_members(1)
+        chat = await registry.get_chat(1)
+        await registry.ensure_schedule(chat, members, datetime.date(2026, 8, 3), workdays=mon_fri)
+        await registry.ensure_schedule(chat, members, datetime.date(2026, 8, 17), workdays=mon_fri)
+
+        schedule = await registry.get_schedule(1)
+        d = datetime.date(2026, 8, 18)
+        while d <= datetime.date(2026, 8, 31):
+            assert schedule[str(d)] is None, str(d)
+            d += datetime.timedelta(days=1)
