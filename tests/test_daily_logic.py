@@ -75,7 +75,7 @@ def test_substitute_swap_today_b_tomorrow_a():
     assert err is None
     assert b_pos == 1  # tomorrow's scheduled leader leads today
     assert a_pos == 0  # today's leader leads tomorrow
-    assert msg == "Сегодня ведёт B, завтра A"
+    assert msg == "Сегодня ведёт B, в следующий рабочий день A"
     # guardrail: member list order and positions untouched
     assert names(m) == ["A", "B", "C"]
     assert [x.position for x in m] == [0, 1, 2]
@@ -94,7 +94,7 @@ def test_substitute_with_stale_next_index():
     b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
     assert err is None
     assert (b_pos, a_pos) == (1, 0)
-    assert msg == "Сегодня ведёт B, завтра A"
+    assert msg == "Сегодня ведёт B, в следующий рабочий день A"
 
 
 def test_substitute_wraps_to_first():
@@ -110,7 +110,7 @@ def test_substitute_wraps_to_first():
     assert err is None
     assert b_pos == 0
     assert a_pos == 2
-    assert msg == "Сегодня ведёт A, завтра C"
+    assert msg == "Сегодня ведёт A, в следующий рабочий день C"
     assert names(m) == ["A", "B", "C"]
     assert [x.position for x in m] == [0, 1, 2]
 
@@ -189,7 +189,7 @@ def test_substitute_message_uses_display_name():
     b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
     assert err is None
     assert (b_pos, a_pos) == (1, 0)
-    assert msg == "Сегодня ведёт @bob, завтра @alice"
+    assert msg == "Сегодня ведёт @bob, в следующий рабочий день @alice"
 
 
 def test_skip_marks_and_repicks_leader():

@@ -69,9 +69,22 @@ async def seed(storage, chat_id=-1001, last_reminder_date=None, next_index=0):
     return chat
 
 
-async def DEFAULT_MONFRI_FAKE(day):
-    """Mon-Fri calendar fake mirroring the production fallback (weekday < 5)."""
-    return day.weekday() < 5
+class FakeWorkdayClient:
+    """Client-shaped calendar fake mirroring WorkdayClient's injected shape.
+
+    bot.py puts a WorkdayClient instance into workflow data under `workdays`,
+    so handlers receive THIS shape and adapt `.is_workday` to the callable
+    contract expected below them. The __call__ alias keeps the legacy
+    `await DEFAULT_MONFRI_FAKE(day)` call sites working unchanged.
+    """
+
+    async def is_workday(self, day):
+        return day.weekday() < 5
+
+    __call__ = is_workday
+
+
+DEFAULT_MONFRI_FAKE = FakeWorkdayClient()
 
 
 async def feed(dp, bot, storage, obj, workdays=DEFAULT_MONFRI_FAKE):
@@ -83,6 +96,14 @@ def next_saturday():
     while day.weekday() != 5:
         day += datetime.timedelta(days=1)
     return day
+
+
+def next_workday_from(day):
+    """First Mon-Fri day strictly after `day` (per the Mon-Fri fake)."""
+    d = day + datetime.timedelta(days=1)
+    while d.weekday() >= 5:
+        d += datetime.timedelta(days=1)
+    return d
 
 
 async def seed_weekend_window(storage):
@@ -104,24 +125,114 @@ async def seed_weekend_window(storage):
 @pytest.mark.asyncio
 async def test_substitute_button_today_b_tomorrow_a(dp, bot, session, storage):
     await seed(storage, last_reminder_date=today_str(), next_index=0)
+    today = today_in_tz(TZ)
+    other_s = next_workday_from(today)
+    await storage.set_schedule(-1001, [(today.isoformat(), 0), (other_s.isoformat(), 1)])
+
     msg = make_message("original")
     cb = make_callback(msg, "daily:sub:0", user_id=2)  # anyone can press
     await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @b, завтра @a" in edits[0]["text"]
+    assert "Сегодня ведёт @b, в следующий рабочий день @a" in edits[0]["text"]
 
     # KEY INVERSION vs the old list-swap: members order NEVER changes
     members = await storage.get_members(-1001)
     assert [m.first_name for m in members] == ["A", "B", "C"]
     assert [m.position for m in members] == [0, 1, 2]
-    # only the schedule rows swap: today -> B (1), tomorrow -> A (0)
+    # only the schedule rows swap: today -> B (1), next workday -> A (0)
     schedule = await storage.get_schedule(-1001)
-    assert schedule[today_str()] == 1
-    assert schedule[tomorrow_str()] == 0
+    assert schedule[today.isoformat()] == 1
+    assert schedule[other_s.isoformat()] == 0
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1  # b_pos: B leads today
+
+
+@pytest.mark.asyncio
+async def test_substitute_button_spans_weekend(dp, bot, session, storage, monkeypatch):
+    """Substitute targets the next scheduled day ACROSS a weekend: Friday's
+    leader swaps with Monday's, not with the empty Saturday row."""
+    from ppbot import daily_handlers
+
+    friday = today_in_tz(TZ)
+    while friday.weekday() != 4:
+        friday += datetime.timedelta(days=1)
+    monday = friday + datetime.timedelta(days=3)
+    monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: friday)
+
+    await seed(storage, next_index=0)
+    await storage.set_schedule(
+        -1001,
+        [
+            (friday.isoformat(), 0),
+            ((friday + datetime.timedelta(days=1)).isoformat(), None),
+            ((friday + datetime.timedelta(days=2)).isoformat(), None),
+            (monday.isoformat(), 1),
+        ],
+    )
+
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:sub:0", user_id=2)
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert "Сегодня ведёт @b, в следующий рабочий день @a" in edits[0]["text"]
+
+    schedule = await storage.get_schedule(-1001)
+    assert schedule[friday.isoformat()] == 1
+    assert schedule[monday.isoformat()] == 0
+    chat = await storage.get_chat(-1001)
+    assert chat.next_index == 1  # b_pos: B leads today
+
+
+@pytest.mark.asyncio
+async def test_substitute_no_future_leader_answers_error(dp, bot, session, storage):
+    """No scheduled future leader at all -> the error surfaces via the
+    callback answer, nothing is swapped or edited."""
+    await seed(storage, next_index=0)
+    today = today_in_tz(TZ)
+    rows = [(today.isoformat(), 0)] + [
+        ((today + datetime.timedelta(days=i)).isoformat(), None) for i in range(1, 15)
+    ]
+    await storage.set_schedule(-1001, rows)
+
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:sub:0", user_id=2)
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    answers = [p for m, p in session.calls if m == "answerCallbackQuery"]
+    assert any("Некого подменять" in (a.get("text") or "") for a in answers)
+    assert not [p for m, p in session.calls if m == "editMessageText"]
+    schedule = await storage.get_schedule(-1001)
+    assert schedule[today.isoformat()] == 0  # untouched
+
+
+@pytest.mark.asyncio
+async def test_roster_change_uses_calendar(dp, bot, session, storage):
+    """Adding a member through the REAL handler flow rebuilds the window with
+    the injected calendar threaded into _refresh_schedule: weekends stay None."""
+    await seed(storage, next_index=0)
+    cb = make_callback(make_message("x"), "daily:add", user_id=11)
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+    session.calls.clear()
+
+    msg = make_message("@dave", message_id=201, user_id=11, username="bob", first_name="Bob")
+    await feed(dp, bot, storage, Update(update_id=2, message=msg))
+
+    members = await storage.get_members(-1001)
+    assert [m.first_name for m in members] == ["A", "B", "C", "dave"]
+
+    schedule = await storage.get_schedule(-1001)
+    assert schedule, "rebuilt window is empty"
+    weekend_rows = {
+        d: pos
+        for d, pos in schedule.items()
+        if datetime.date.fromisoformat(d).weekday() >= 5
+    }
+    assert weekend_rows, "rebuilt window contains no weekend rows"
+    assert all(pos is None for pos in weekend_rows.values())
 
 
 @pytest.mark.asyncio
@@ -145,7 +256,7 @@ async def test_substitute_button_with_stale_next_index(dp, bot, session, storage
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @b, завтра @a" in edits[0]["text"]
+    assert "Сегодня ведёт @b, в следующий рабочий день @a" in edits[0]["text"]
 
     members = await storage.get_members(-1001)
     assert [m.first_name for m in members] == ["A", "B", "C"]
@@ -161,12 +272,17 @@ async def test_substitute_command_with_reminder_sent(dp, bot, session, storage):
     """Regression: /substitute substitutes today's leader (A, schedule[today]),
     even after the morning tag was already sent today."""
     await seed(storage, last_reminder_date=today_str(), next_index=0)
+    rows = [
+        ((datetime.date.fromisoformat(today_str()) + datetime.timedelta(days=i)).isoformat(), i % 3)
+        for i in range(15)
+    ]
+    await storage.set_schedule(-1001, rows)  # today -> 0 (A), tomorrow -> 1 (B)
     msg = make_message("/substitute")
     await feed(dp, bot, storage, Update(update_id=1, message=msg))
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @b, завтра @a" in sends[0]["text"]
+    assert "Сегодня ведёт @b, в следующий рабочий день @a" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert [m.first_name for m in members] == ["A", "B", "C"]
     schedule = await storage.get_schedule(-1001)
@@ -203,7 +319,7 @@ async def test_substitute_button_works_without_reminder_fired(dp, bot, session, 
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @b, завтра @a" in edits[0]["text"]
+    assert "Сегодня ведёт @b, в следующий рабочий день @a" in edits[0]["text"]
 
     answers = [p for m, p in session.calls if m == "answerCallbackQuery"]
     assert not any(("устарело" in (a.get("text") or "")) for a in answers)
@@ -323,12 +439,17 @@ async def test_who_follows_schedule_not_stale_next_index(dp, bot, session, stora
 @pytest.mark.asyncio
 async def test_substitute_command(dp, bot, session, storage):
     await seed(storage, next_index=0)
+    rows = [
+        ((datetime.date.fromisoformat(today_str()) + datetime.timedelta(days=i)).isoformat(), i % 3)
+        for i in range(15)
+    ]
+    await storage.set_schedule(-1001, rows)  # today -> 0 (A), tomorrow -> 1 (B)
     msg = make_message("/substitute")
     await feed(dp, bot, storage, Update(update_id=1, message=msg))
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @b, завтра @a" in sends[0]["text"]
+    assert "Сегодня ведёт @b, в следующий рабочий день @a" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert [m.first_name for m in members] == ["A", "B", "C"]
     assert [m.position for m in members] == [0, 1, 2]
@@ -431,6 +552,11 @@ async def test_substitute_button_works_for_user_id_none_members(dp, bot, session
     await storage.upsert_chat(chat)
     await storage.add_member(DailyMember(chat_id=-1001, position=0, first_name="testuser", username="testuser"))
     await storage.add_member(DailyMember(chat_id=-1001, position=1, first_name="Никита", username="Никита"))
+    rows = [
+        ((datetime.date.fromisoformat(today_str()) + datetime.timedelta(days=i)).isoformat(), i % 2)
+        for i in range(15)
+    ]
+    await storage.set_schedule(-1001, rows)  # today -> 0 (testuser), tomorrow -> 1 (Никита)
 
     from ppbot.daily_ui import build_reminder_markup
     from ppbot.daily import next_leader
@@ -448,7 +574,7 @@ async def test_substitute_button_works_for_user_id_none_members(dp, bot, session
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @Никита, завтра @testuser" in edits[0]["text"]
+    assert "Сегодня ведёт @Никита, в следующий рабочий день @testuser" in edits[0]["text"]
     # member order unchanged; schedule rows swapped (position-driven, works
     # for user_id=None members)
     members = await storage.get_members(-1001)

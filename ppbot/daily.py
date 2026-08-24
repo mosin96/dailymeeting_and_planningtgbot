@@ -270,8 +270,8 @@ def apply_substitute(
     covering today) — a substitute must be able to lead today.
 
     Returns (b_pos, a_pos, message, error). On success error is None and
-    message is "Сегодня ведёт {B}, завтра {A}" (display names). On failure
-    returns (None, None, None, error_message).
+    message is "Сегодня ведёт {B}, в следующий рабочий день {A}" (display
+    names). On failure returns (None, None, None, error_message).
     """
     if not members:
         return None, None, None, "Команда пуста"
@@ -292,7 +292,7 @@ def apply_substitute(
     return (
         b_pos,
         a_pos,
-        "Сегодня ведёт {}, завтра {}".format(b_member.display_name, a_member.display_name),
+        "Сегодня ведёт {}, в следующий рабочий день {}".format(b_member.display_name, a_member.display_name),
         None,
     )
 
