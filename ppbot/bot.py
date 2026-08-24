@@ -93,13 +93,13 @@ def main():
         workdays = WorkdayClient(session=http_session)
         await storage.init_db(DB_PATH)
         await daily.init_db(DB_PATH)
-        await migrate_schedule_model(daily, TZ)
+        await migrate_schedule_model(daily, TZ, workdays)
         await bot.set_my_commands(
             [BotCommand(command=cmd, description=desc) for cmd, desc in COMMANDS]
         )
         try:
             await asyncio.gather(
-                dp.start_polling(bot, storage=storage, daily=daily, tz=TZ),
+                dp.start_polling(bot, storage=storage, daily=daily, tz=TZ, workdays=workdays),
                 reminder_loop(bot, daily, workdays, TZ),
             )
         finally:

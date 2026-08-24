@@ -111,6 +111,17 @@ class FakeClock:
         return self.times.pop(0)
 
 
+class SpyCalendar:
+    """Mon-Fri calendar that records every date it is asked about."""
+
+    def __init__(self):
+        self.asked = []
+
+    async def is_workday(self, date):
+        self.asked.append(date)
+        return date.weekday() < 5
+
+
 @pytest.fixture
 async def storage(tmp_path):
     db = tmp_path / "daily.db"
@@ -394,3 +405,63 @@ async def test_manual_setleader_does_not_cancel_scheduler(storage):
     assert "Дейлик начинается, всех ждем!" in bot2.sent[0]["text"]
     chat = await storage.get_chat(1)
     assert chat.last_start_date == "2026-08-03"
+
+
+@pytest.mark.asyncio
+async def test_migrate_v2_reseeds_legacy_weekend_burned_window(storage):
+    """Legacy install (only meta v1): the window was built without a calendar,
+    so Sat/Sun hold positions (burned turns) and the Monday after them is wrong.
+    The one-time v2 migration reseeds every chat's window from next_index with
+    a Mon-Fri calendar (weekends -> None rows, workdays continue (prev+1)%n),
+    stamps meta daily_schedule_v2, and a second run is a no-op (V2 guard)."""
+    from ppbot.daily import today_in_tz
+    from ppbot.scheduler import META_SCHEDULE_V1, META_SCHEDULE_V2, migrate_schedule_model
+
+    tz = ZoneInfo("UTC")
+    today = today_in_tz(tz)
+    await seed_chat(storage, members=3, next_index=1)
+    # legacy install marker: only V1 present; migration must NOT early-return on it
+    await storage.set_meta(META_SCHEDULE_V1, "2026-01-01")
+    # legacy "burned" window: EVERY date holds a position, weekends included,
+    # so post-weekend workdays carry wrong (rotation-shifted) leaders.
+    burned = [((today + datetime.timedelta(days=i)).isoformat(), i % 3) for i in range(15)]
+    await storage.set_schedule(1, burned)
+
+    mon_fri = FakeCalendar(lambda d: d.weekday() < 5)
+    await migrate_schedule_model(storage, tz, mon_fri)
+
+    schedule = await storage.get_schedule(1)
+    window = [today + datetime.timedelta(days=i) for i in range(15)]
+    assert len(schedule) == 15
+    for d in window:
+        if d.weekday() >= 5:
+            assert schedule[str(d)] is None, str(d)
+    seq = [schedule[str(d)] for d in window if schedule[str(d)] is not None]
+    assert seq[0] == 1  # continuation starts at chat.next_index
+    for prev, cur in zip(seq, seq[1:]):
+        assert cur == (prev + 1) % 3, (prev, cur)
+    assert await storage.get_meta(META_SCHEDULE_V2) == str(today)
+
+    # Idempotency: V2 stamped -> second run must NOT rewrite windows.
+    victim = next(d for d in window if d.weekday() < 5)
+    await storage.extend_schedule(1, [(str(victim), 42)])
+    await migrate_schedule_model(storage, tz, mon_fri)
+    schedule = await storage.get_schedule(1)
+    assert schedule[str(victim)] == 42  # corrupted row SURVIVED (no rewrite)
+
+
+@pytest.mark.asyncio
+async def test_loop_passes_real_calendar_into_schedule(storage):
+    """reminder_loop feeds its calendar client down to build_schedule (via
+    ensure_schedule): after one tick the spy must have been asked about dates
+    strictly beyond today (the seeded window covers today..today+14)."""
+    from ppbot.scheduler import reminder_loop
+
+    await seed_chat(storage)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 3, 9, 45)
+    spy = SpyCalendar()
+    await run_one_iteration(reminder_loop, bot, storage, spy, FakeClock([now, now + datetime.timedelta(seconds=35)]))
+
+    today = datetime.date(2026, 8, 3)
+    assert any(d > today for d in spy.asked), sorted({str(d) for d in spy.asked})

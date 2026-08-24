@@ -21,7 +21,6 @@ from aiogram.exceptions import TelegramBadRequest
 from ppbot.daily import (
     SCHEDULE_DAYS,
     DailyChat,
-    build_schedule,
     format_ru_date,
     today_in_tz,
 )
@@ -32,6 +31,7 @@ logger = logging.getLogger(__name__)
 REMIND_BEFORE_MINUTES = 15
 START_GRACE_MINUTES = 60
 META_SCHEDULE_V1 = "daily_schedule_v1"
+META_SCHEDULE_V2 = "daily_schedule_v2"
 
 START_TEXT = "Дейлик начинается, всех ждем!"
 
@@ -157,19 +157,30 @@ async def reminder_loop(
 
 
 async def migrate_schedule_model(daily: DailyRegistry, tz, workdays=None) -> None:
-    """One-time seeding of the 14-day leader schedule (idempotent via daily_meta).
+    """One-time v2 reseed of leader schedule windows (idempotent via daily_meta).
 
-    Old chats carry only next_index (pointing at today's leader). Seed a fresh
-    daily_schedule window from today so the schedule table becomes the source
-    of truth; afterwards the scheduler only extends/trims it.
+    Windows built before the production calendar existed burn weekend slots:
+    the rotation advanced on Sat/Sun even though reminders never fire then.
+    Reseed every chat's window from its next_index with a workday-aware build
+    (non-workdays keep rows with position=None that do not consume the
+    rotation), then stamp daily_schedule_v2; later startups return early so
+    existing windows are never rewritten. The legacy V1 key is neither read
+    nor removed.
     """
-    if await daily.get_meta(META_SCHEDULE_V1) is not None:
+    if await daily.get_meta(META_SCHEDULE_V2) is not None:
         return
+    workday_predicate = workdays.is_workday if workdays is not None else None
     today = today_in_tz(tz)
     for chat in await daily.list_chats():
         members = await daily.get_members(chat.chat_id)
         if not members:
             continue
-        rows = await build_schedule(members, today, chat.next_index, SCHEDULE_DAYS + 1, workdays=workdays)
-        await daily.set_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
-    await daily.set_meta(META_SCHEDULE_V1, str(today))
+        await daily.rebuild_schedule(
+            chat.chat_id,
+            chat.next_index,
+            members,
+            today,
+            workdays=workday_predicate,
+            days=SCHEDULE_DAYS + 1,
+        )
+    await daily.set_meta(META_SCHEDULE_V2, str(today))

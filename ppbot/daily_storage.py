@@ -306,14 +306,17 @@ class DailyRegistry:
         members: List[DailyMember],
         today,
         workdays=None,
+        *,
+        days=SCHEDULE_DAYS + 1,
     ) -> None:
-        """Rebuild the 14-day leader window starting from `today`.
+        """Rebuild the leader window starting from `today`.
 
         Called after a roster/rotation change (add/remove/substitute/skip/
         manual leader/vacation) so the persisted schedule reflects the updated
-        rotation and availability.
+        rotation and availability. Builds `days` rows (default: the standard
+        15-row window covering today..today+14).
         """
-        rows = await build_schedule(members, today, next_index, SCHEDULE_DAYS + 1, workdays=workdays)
+        rows = await build_schedule(members, today, next_index, days, workdays=workdays)
         await self.set_schedule(chat_id, [(d.isoformat(), p) for d, p in rows])
 
     async def ensure_schedule(
