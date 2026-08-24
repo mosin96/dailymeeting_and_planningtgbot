@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from aiogram.types import CallbackQuery, Chat, Message, Update, User
 
-from ppbot.daily import DailyChat, DailyMember
+from ppbot.daily import DailyChat, DailyMember, today_in_tz
 from ppbot.daily_handlers import create_router
 from ppbot.daily_storage import DailyRegistry
 
@@ -69,8 +69,36 @@ async def seed(storage, chat_id=-1001, last_reminder_date=None, next_index=0):
     return chat
 
 
-async def feed(dp, bot, storage, obj):
-    await dp.feed_update(bot, obj, daily=storage, tz=TZ)
+async def DEFAULT_MONFRI_FAKE(day):
+    """Mon-Fri calendar fake mirroring the production fallback (weekday < 5)."""
+    return day.weekday() < 5
+
+
+async def feed(dp, bot, storage, obj, workdays=DEFAULT_MONFRI_FAKE):
+    await dp.feed_update(bot, obj, daily=storage, tz=TZ, workdays=workdays)
+
+
+def next_saturday():
+    day = today_in_tz(TZ)
+    while day.weekday() != 5:
+        day += datetime.timedelta(days=1)
+    return day
+
+
+async def seed_weekend_window(storage):
+    """Seed team A/B/C plus a Saturday-anchored window: Sat -> A, Sun/Mon -> None, Tue -> B."""
+    await seed(storage, next_index=0)
+    saturday = next_saturday()
+    await storage.set_schedule(
+        -1001,
+        [
+            (saturday.isoformat(), 0),
+            ((saturday + datetime.timedelta(days=1)).isoformat(), None),
+            ((saturday + datetime.timedelta(days=2)).isoformat(), None),
+            ((saturday + datetime.timedelta(days=3)).isoformat(), 1),
+        ],
+    )
+    return saturday
 
 
 @pytest.mark.asyncio
@@ -971,6 +999,73 @@ async def test_who_callback_edits_in_place(dp, bot, session, storage):
     assert len(edits) == 1
     assert "Сегодня ведёт @a" in edits[0]["text"]
     assert not [p for m, p in session.calls if m == "sendMessage"]
+
+
+# ---- weekend-rotation-skip T4: non-workday /who and /daily menu ----
+
+@pytest.mark.asyncio
+async def test_who_on_nonworkday_shows_nearest_workday_leader(dp, bot, session, storage, monkeypatch):
+    """Weekend /who: non-workday notice plus the nearest scheduled leader."""
+    from ppbot import daily_ui
+
+    saturday = await seed_weekend_window(storage)
+    eval_day = saturday + datetime.timedelta(days=1)  # Sunday row is None inside the seeded window
+    monkeypatch.setattr(daily_ui, "today_in_tz", lambda tz: eval_day)
+
+    cb = make_callback(make_message("original"), "daily:who")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    text = edits[0]["text"]
+    assert "нерабочий день" in text
+    assert "Ближайший дейлик" in text
+    assert "@b" in text
+
+
+@pytest.mark.asyncio
+async def test_who_on_workday_all_skipped_keeps_old_text(dp, bot, session, storage, monkeypatch):
+    """On a WORKDAY with everyone skipped, /who keeps the classic cancel text."""
+    from ppbot import daily_ui
+
+    workday = today_in_tz(TZ)
+    while not await DEFAULT_MONFRI_FAKE(workday):
+        workday += datetime.timedelta(days=1)
+    monkeypatch.setattr(daily_ui, "today_in_tz", lambda tz: workday)
+
+    await seed(storage, next_index=0)
+    for i in range(3):
+        await storage.update_member_skip(-1001, 1 + i, workday.isoformat())
+
+    msg = make_message("/who")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    assert "Все пропущены сегодня" in sends[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_menu_on_nonworkday(dp, bot, session, storage, monkeypatch):
+    """Weekend /daily menu: non-workday status line, buttons untouched."""
+    from ppbot import daily_ui
+
+    saturday = await seed_weekend_window(storage)
+    eval_day = saturday + datetime.timedelta(days=1)  # Sunday row is None inside the seeded window
+    monkeypatch.setattr(daily_ui, "today_in_tz", lambda tz: eval_day)
+
+    cb = make_callback(make_message("original"), "daily:menu")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    text = edits[0]["text"]
+    assert "🚫 Сегодня нерабочий день" in text
+    assert "📅 Ближайший дейлик" in text
+    assert "@b" in text
+    markup = edits[0]["reply_markup"]
+    flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
+    assert flat == ["daily:team", "daily:time", "daily:who", "daily:help", "daily:lead", "daily:vac"]
 
 
 # ---- reset history ----

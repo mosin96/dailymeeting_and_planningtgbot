@@ -11,6 +11,7 @@ from ppbot.daily import (
     DailyMember,
     format_ru_date,
     member_list_text,
+    next_scheduled_date,
     today_in_tz,
 )
 from ppbot.daily_storage import DailyRegistry
@@ -109,13 +110,13 @@ def build_remove_markup(members: List[DailyMember]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _ensure_today_schedule(daily: DailyRegistry, chat: DailyChat, members: List[DailyMember], today) -> Dict[str, Optional[int]]:
+async def _ensure_today_schedule(daily: DailyRegistry, chat: DailyChat, members: List[DailyMember], today, workdays=None) -> Dict[str, Optional[int]]:
     """Ensure the persisted 14-day schedule covers today, return it as dict.
 
     Mirrors the scheduler's window maintenance so the /who and /daily views
     always read the same source of truth as the reminder.
     """
-    await daily.ensure_schedule(chat, members, today)
+    await daily.ensure_schedule(chat, members, today, workdays=workdays)
     return await daily.get_schedule(chat.chat_id)
 
 
@@ -131,14 +132,14 @@ async def _schedule_leader(
     return next((m for m in members if m.position == position), None)
 
 
-async def show_menu(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
+async def show_menu(message: Message, daily: DailyRegistry, tz, workdays=None, edit: bool = False) -> None:
     chat_id = message.chat.id
     chat = await daily.get_chat(chat_id)
     members = await daily.get_members(chat_id)
     if chat is None:
         chat = DailyChat(chat_id=chat_id)
     today = today_in_tz(tz)
-    schedule = await _ensure_today_schedule(daily, chat, members, today)
+    schedule = await _ensure_today_schedule(daily, chat, members, today, workdays=workdays)
     leader = await _schedule_leader(schedule, members, str(today))
     leader_str = leader.display_name if leader else "—"
     vacationers = [m for m in members if m.is_on_vacation(str(today))]
@@ -155,7 +156,19 @@ async def show_menu(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
             for m in vacationers
         )
         text += "В отпуске: {}\n".format(parts)
-    text += "👤 Сегодня ведёт: {leader}".format(leader=leader_str)
+    nonworkday = ((await workdays(today)) is False) if workdays else today.weekday() >= 5
+    if nonworkday:
+        text += "🚫 Сегодня нерабочий день, дейлика нет"
+        nxt = next_scheduled_date(schedule, str(today))
+        nxt_member = None
+        if nxt is not None:
+            nxt_member = await _schedule_leader(schedule, members, nxt)
+        if nxt is not None and nxt_member is not None:
+            text += "\n📅 Ближайший дейлик: {}, ведёт {}".format(format_ru_date(nxt), nxt_member.display_name)
+    else:
+        text += "👤 Сегодня ведёт: {leader}".format(leader=leader_str)
+        if leader is None:
+            text += "\nВсе пропущены сегодня"
     if edit:
         await message.edit_text(text, reply_markup=build_menu_markup())
     else:
@@ -192,7 +205,7 @@ async def show_remove_list(message: Message, daily: DailyRegistry, tz, edit: boo
         await message.answer(text, reply_markup=markup)
 
 
-async def who_reply(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
+async def who_reply(message: Message, daily: DailyRegistry, tz, workdays=None, edit: bool = False) -> None:
     chat_id = message.chat.id
     chat = await daily.get_chat(chat_id)
     members = await daily.get_members(chat_id)
@@ -200,13 +213,23 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
     today_s = str(today)
     if chat is None:
         chat = DailyChat(chat_id=chat_id)
-    schedule = await _ensure_today_schedule(daily, chat, members, today)
+    schedule = await _ensure_today_schedule(daily, chat, members, today, workdays=workdays)
     leader = await _schedule_leader(schedule, members, today_s)
     if leader is None:
         if not members:
             text = "Команда пуста. Добавьте участников через /team"
         else:
-            text = "Все пропущены сегодня, дейлик отменён"
+            nonworkday = ((await workdays(today)) is False) if workdays else today.weekday() >= 5
+            if nonworkday:
+                text = "Сегодня нерабочий день, дейлика нет."
+                nxt = next_scheduled_date(schedule, today_s)
+                nxt_member = None
+                if nxt is not None:
+                    nxt_member = await _schedule_leader(schedule, members, nxt)
+                if nxt is not None and nxt_member is not None:
+                    text += "\nБлижайший дейлик: {}, ведёт {}".format(format_ru_date(nxt), nxt_member.display_name)
+            else:
+                text = "Все пропущены сегодня, дейлик отменён"
         if edit:
             await message.edit_text(text)
         else:
