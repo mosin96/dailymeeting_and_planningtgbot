@@ -299,14 +299,21 @@ class DailyRegistry:
             )
         await self._db.commit()
 
-    async def rebuild_schedule(self, chat_id: int, next_index: int, members: List[DailyMember], today) -> None:
+    async def rebuild_schedule(
+        self,
+        chat_id: int,
+        next_index: int,
+        members: List[DailyMember],
+        today,
+        workdays=None,
+    ) -> None:
         """Rebuild the 14-day leader window starting from `today`.
 
         Called after a roster/rotation change (add/remove/substitute/skip/
         manual leader/vacation) so the persisted schedule reflects the updated
         rotation and availability.
         """
-        rows = build_schedule(members, today, next_index, SCHEDULE_DAYS + 1)
+        rows = await build_schedule(members, today, next_index, SCHEDULE_DAYS + 1, workdays=workdays)
         await self.set_schedule(chat_id, [(d.isoformat(), p) for d, p in rows])
 
     async def ensure_schedule(
@@ -314,6 +321,7 @@ class DailyRegistry:
         chat: DailyChat,
         members: List[DailyMember],
         today,
+        workdays=None,
     ) -> None:
         """Guarantee the daily_schedule window covers today..today+14.
 
@@ -330,7 +338,7 @@ class DailyRegistry:
         today_s = str(today)
         schedule = await self.get_schedule(chat.chat_id)
         if not schedule or today_s not in schedule:
-            rows = build_schedule(members, today, chat.next_index, SCHEDULE_DAYS + 1)
+            rows = await build_schedule(members, today, chat.next_index, SCHEDULE_DAYS + 1, workdays=workdays)
             await self.set_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
             schedule = {d.isoformat(): p for d, p in rows}
 
@@ -348,7 +356,7 @@ class DailyRegistry:
                 cursor = (last_pos + 1) % n
             start = datetime.date.fromisoformat(last_date) + datetime.timedelta(days=1)
             days = (target - start).days + 1
-            rows = build_schedule(members, start, cursor, days)
+            rows = await build_schedule(members, start, cursor, days, workdays=workdays)
             await self.extend_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
             schedule.update({d.isoformat(): p for d, p in rows})
 

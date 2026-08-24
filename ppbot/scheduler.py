@@ -70,11 +70,24 @@ def should_send_start(chat: DailyChat, now: datetime.datetime, today: datetime.d
     return daily_dt <= now < daily_dt + datetime.timedelta(minutes=START_GRACE_MINUTES)
 
 
-async def _process_chat(bot: Bot, storage: DailyRegistry, chat: DailyChat, now: datetime.datetime, today: datetime.date, is_workday: bool):
+async def _process_chat(
+    bot: Bot,
+    storage: DailyRegistry,
+    chat: DailyChat,
+    now: datetime.datetime,
+    today: datetime.date,
+    is_workday: bool,
+    workday_client=None,
+):
     today_s = str(today)
 
     members = await storage.get_members(chat.chat_id)
-    await storage.ensure_schedule(chat, members, today)
+    await storage.ensure_schedule(
+        chat,
+        members,
+        today,
+        workdays=workday_client.is_workday if workday_client is not None else None,
+    )
     schedule = await storage.get_schedule(chat.chat_id)
     position = schedule.get(today_s)
     leader = next((m for m in members if m.position == position), None) if position is not None else None
@@ -135,7 +148,7 @@ async def reminder_loop(
             is_workday = await workday_client.is_workday(today)
             for chat in await storage.list_chats():
                 try:
-                    await _process_chat(bot, storage, chat, current, today, is_workday)
+                    await _process_chat(bot, storage, chat, current, today, is_workday, workday_client)
                 except Exception:
                     logger.exception("chat %s processing failed", chat.chat_id)
         except Exception:
@@ -143,7 +156,7 @@ async def reminder_loop(
         await asyncio.sleep(interval)
 
 
-async def migrate_schedule_model(daily: DailyRegistry, tz) -> None:
+async def migrate_schedule_model(daily: DailyRegistry, tz, workdays=None) -> None:
     """One-time seeding of the 14-day leader schedule (idempotent via daily_meta).
 
     Old chats carry only next_index (pointing at today's leader). Seed a fresh
@@ -157,6 +170,6 @@ async def migrate_schedule_model(daily: DailyRegistry, tz) -> None:
         members = await daily.get_members(chat.chat_id)
         if not members:
             continue
-        rows = build_schedule(members, today, chat.next_index, SCHEDULE_DAYS + 1)
+        rows = await build_schedule(members, today, chat.next_index, SCHEDULE_DAYS + 1, workdays=workdays)
         await daily.set_schedule(chat.chat_id, [(d.isoformat(), p) for d, p in rows])
     await daily.set_meta(META_SCHEDULE_V1, str(today))

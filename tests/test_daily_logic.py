@@ -1,4 +1,6 @@
 """Pure daily rotation logic tests."""
+import datetime
+
 import pytest
 
 from ppbot.daily import (
@@ -517,3 +519,90 @@ def test_set_leader_unknown_position():
 def test_set_leader_empty_team():
     _, err = set_leader([], 0, 0, "2026-08-03")
     assert err == "Команда пуста"
+
+
+# ---- workday-aware build_schedule (T1 weekend-rotation-skip) ----
+
+async def wd(d):
+    return d.weekday() < 5
+
+
+async def always_workday(d):
+    return True
+
+
+async def test_build_schedule_skips_non_workdays():
+    from ppbot.daily import build_schedule
+
+    m = [
+        member(0, "U0", user_id=1),
+        member(1, "U1", user_id=2),
+        member(2, "U2", user_id=3),
+    ]
+    rows = await build_schedule(m, datetime.date(2026, 8, 8), 2, 5, workdays=wd)
+    assert rows == [
+        (datetime.date(2026, 8, 8), None),
+        (datetime.date(2026, 8, 9), None),
+        (datetime.date(2026, 8, 10), 2),
+        (datetime.date(2026, 8, 11), 0),
+        (datetime.date(2026, 8, 12), 1),
+    ]
+
+
+async def test_build_schedule_default_falls_back_mon_fri():
+    from ppbot.daily import build_schedule
+
+    m = [
+        member(0, "U0", user_id=1),
+        member(1, "U1", user_id=2),
+        member(2, "U2", user_id=3),
+    ]
+    rows = await build_schedule(m, datetime.date(2026, 8, 8), 2, 5)
+    assert rows == [
+        (datetime.date(2026, 8, 8), None),
+        (datetime.date(2026, 8, 9), None),
+        (datetime.date(2026, 8, 10), 2),
+        (datetime.date(2026, 8, 11), 0),
+        (datetime.date(2026, 8, 12), 1),
+    ]
+
+
+async def test_build_schedule_working_saturday_when_calendar_says_workday():
+    from ppbot.daily import build_schedule
+
+    m = [
+        member(0, "U0", user_id=1),
+        member(1, "U1", user_id=2),
+        member(2, "U2", user_id=3),
+    ]
+    rows = await build_schedule(m, datetime.date(2026, 8, 8), 2, 5, workdays=always_workday)
+    assert rows == [
+        (datetime.date(2026, 8, 8), 2),
+        (datetime.date(2026, 8, 9), 0),
+        (datetime.date(2026, 8, 10), 1),
+        (datetime.date(2026, 8, 11), 2),
+        (datetime.date(2026, 8, 12), 0),
+    ]
+
+
+def test_next_scheduled_date_picks_next_non_none():
+    from ppbot.daily import next_scheduled_date
+
+    schedule = {"2026-08-07": 0, "2026-08-08": None, "2026-08-09": None, "2026-08-10": 1}
+    assert next_scheduled_date(schedule, "2026-08-07") == "2026-08-10"
+
+
+def test_next_scheduled_date_skips_none_rows():
+    from ppbot.daily import next_scheduled_date
+
+    schedule = {"2026-08-06": 2, "2026-08-08": None, "2026-08-09": None, "2026-08-11": 0}
+    assert next_scheduled_date(schedule, "2026-08-06") == "2026-08-11"
+    assert next_scheduled_date(schedule, "2026-08-08") == "2026-08-11"
+
+
+def test_next_scheduled_date_returns_none_when_absent():
+    from ppbot.daily import next_scheduled_date
+
+    assert next_scheduled_date({"2026-08-08": None}, "2026-08-06") is None
+    assert next_scheduled_date({"2026-08-05": 0}, "2026-08-06") is None
+    assert next_scheduled_date({}, "2026-08-06") is None

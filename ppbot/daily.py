@@ -5,7 +5,7 @@ import datetime
 import re
 from dataclasses import dataclass
 from html import escape
-from typing import Dict, List, Optional, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 VACATION_DATE_RE = re.compile(r"(\d{1,2})[./](\d{1,2})[./](\d{4})")
 ISO_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -166,18 +166,26 @@ def advance_next(members: List[DailyMember], leader_pos: int) -> int:
     return (leader_pos + 1) % len(members)
 
 
-def build_schedule(
+async def build_schedule(
     members: List[DailyMember],
     start_date: "datetime.date",
     start_pos: int,
     days: int = SCHEDULE_DAYS,
+    *,
+    workdays: Optional[Callable[["datetime.date"], Awaitable[bool]]] = None,
 ) -> List[Tuple["datetime.date", Optional[int]]]:
     """Precompute a rolling leader plan for `days` consecutive days.
 
-    Walks the rotation circle from `start_pos`, one step per day,
+    Walks the rotation circle from `start_pos`, one step per workday,
     skipping members that are unavailable on that specific date (vacation
     end-date or skip_date). A day where nobody is available yields a
     (date, None) row so callers can announce "the daily is cancelled".
+
+    A non-workday (per the async `workdays` predicate, duck-typed as
+    WorkdayClient.is_workday) yields a (date, None) row and does NOT
+    consume a rotation slot — нерабочий день не занимает слот ротации.
+    Without a calendar (workdays=None) the fallback is Mon-Fri
+    (weekday() < 5), matching the documented README fallback.
 
     Returns a list of (date, position) in chronological order; the position
     is stable (0..n-1) even for members added by @username (user_id=None).
@@ -189,6 +197,10 @@ def build_schedule(
     rows = []
     for i in range(days):
         day = start_date + datetime.timedelta(days=i)
+        ok = await workdays(day) if workdays is not None else day.weekday() < 5
+        if not ok:
+            rows.append((day, None))
+            continue
         day_s = day.isoformat()
         leader = _next_non_skipped(members, cursor, day_s)
         if leader is None:
@@ -197,6 +209,13 @@ def build_schedule(
             rows.append((day, leader.position))
             cursor = (leader.position + 1) % n
     return rows
+
+
+def next_scheduled_date(schedule: Dict[str, Optional[int]], after_s: str) -> Optional[str]:
+    """Earliest schedule date key strictly greater than `after_s` with a
+    non-None position; None when no such date exists."""
+    later = [d for d in schedule if d > after_s and schedule[d] is not None]
+    return min(later) if later else None
 
 
 def set_leader(

@@ -180,22 +180,36 @@ async def test_loop_sends_start_message_at_daily_time(storage):
 
 @pytest.mark.asyncio
 async def test_loop_seeds_schedule_window(storage):
-    """First loop pass seeds the daily_schedule covering today..today+14."""
+    """First loop pass seeds the daily_schedule covering today..today+14.
+
+    With a Mon-Fri calendar the rotation advances only on workdays: Sat/Sun
+    keep their rows but hold position=None WITHOUT burning a turn.
+    """
     from ppbot.scheduler import reminder_loop
 
     await seed_chat(storage)
     bot = FakeBot()
     now = datetime.datetime(2026, 8, 3, 9, 45)
-    await run_one_iteration(reminder_loop, bot, storage, FakeWorkdays(True), FakeClock([now, now + datetime.timedelta(seconds=35)]))
+    mon_fri = FakeCalendar(lambda d: d.weekday() < 5)
+    await run_one_iteration(reminder_loop, bot, storage, mon_fri, FakeClock([now, now + datetime.timedelta(seconds=35)]))
 
     assert len(bot.sent) == 1
     schedule = await storage.get_schedule(1)
     today = datetime.date(2026, 8, 3)
-    assert len(schedule) == 15  # today + 14 days
-    for i in range(15):
-        assert str(today + datetime.timedelta(days=i)) in schedule
+    assert len(schedule) == 15  # today + 14 days; non-workdays are STORED as None rows
+    window = [today + datetime.timedelta(days=i) for i in range(15)]
+    for d in window:
+        if d.weekday() < 5:
+            assert schedule[str(d)] is not None, str(d)
+    assigned = [schedule[str(d)] for d in window]
+    seq = [p for p in assigned if p is not None]
+    for prev, cur in zip(seq, seq[1:]):
+        assert cur == (prev + 1) % 3
     assert schedule["2026-08-03"] == 0
     assert schedule["2026-08-04"] == 1
+    assert schedule["2026-08-08"] is None
+    assert schedule["2026-08-09"] is None
+    assert schedule["2026-08-10"] == 2  # continuity after the weekend ((prev+1)%n); pre-fix bug gave 1 (weekend slots burned)
     chat = await storage.get_chat(1)
     assert chat.next_index == 0
 
@@ -208,19 +222,21 @@ async def test_loop_extends_and_trims_schedule(storage):
     await seed_chat(storage)
     bot = FakeBot()
     now = datetime.datetime(2026, 8, 3, 9, 45)
-    await run_one_iteration(reminder_loop, bot, storage, FakeWorkdays(True), FakeClock([now, now + datetime.timedelta(seconds=35)]))
+    mon_fri = FakeCalendar(lambda d: d.weekday() < 5)
+    await run_one_iteration(reminder_loop, bot, storage, mon_fri, FakeClock([now, now + datetime.timedelta(seconds=35)]))
 
     next_day = datetime.datetime(2026, 8, 4, 9, 45)
     bot2 = FakeBot()
-    await run_one_iteration(reminder_loop, bot2, storage, FakeWorkdays(True), FakeClock([next_day, next_day + datetime.timedelta(seconds=35)]))
+    await run_one_iteration(reminder_loop, bot2, storage, mon_fri, FakeClock([next_day, next_day + datetime.timedelta(seconds=35)]))
 
     schedule = await storage.get_schedule(1)
     assert "2026-08-18" in schedule
+    assert schedule["2026-08-18"] == 2  # extension continues the rotation after Fri Aug 15... Mon Aug 17 pos 1 -> (1+1)%3
     assert "2026-08-03" in schedule
 
     await storage.extend_schedule(1, [("2026-07-01", 0)])
     bot3 = FakeBot()
-    await run_one_iteration(reminder_loop, bot3, storage, FakeWorkdays(True), FakeClock([next_day, next_day + datetime.timedelta(seconds=35)]))
+    await run_one_iteration(reminder_loop, bot3, storage, mon_fri, FakeClock([next_day, next_day + datetime.timedelta(seconds=35)]))
     schedule = await storage.get_schedule(1)
     assert "2026-07-01" not in schedule
 
