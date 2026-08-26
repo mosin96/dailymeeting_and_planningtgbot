@@ -46,6 +46,11 @@ class DailyMember:
 
     @property
     def display_name(self) -> str:
+        if self.username:
+            at_part = "@{}".format(self.username)
+            if at_part in self.first_name:
+                return self.first_name  # new freeform: "Иван @ivanov"
+            return at_part  # old format compatibility: "@ivanov"
         return self.first_name
 
     def get_display_name(self, today=None) -> str:
