@@ -606,3 +606,38 @@ def test_next_scheduled_date_returns_none_when_absent():
     assert next_scheduled_date({"2026-08-08": None}, "2026-08-06") is None
     assert next_scheduled_date({"2026-08-05": 0}, "2026-08-06") is None
     assert next_scheduled_date({}, "2026-08-06") is None
+
+
+def test_get_display_name_vacation_strips_at():
+    m = member(0, "Иван", username="ivanov", vacation_until="2026-08-05")
+    assert m.get_display_name("2026-08-03") == "Иван"
+
+def test_get_display_name_vacation_over_keeps_at():
+    m = member(0, "Иван", username="ivanov", vacation_until="2026-08-02")
+    assert m.get_display_name("2026-08-03") == "@ivanov"
+
+def test_get_display_name_no_vacation_keeps_at():
+    m = member(0, "Иван", username="ivanov")
+    assert m.get_display_name("2026-08-03") == "@ivanov"
+
+def test_get_display_name_no_username_returns_first_name():
+    m = member(0, "Иван")
+    assert m.get_display_name("2026-08-03") == "Иван"
+
+def test_get_display_name_none_today_returns_display_name():
+    m = member(0, "Иван", username="ivanov")
+    assert m.get_display_name(None) == "@ivanov"
+
+def test_get_mention_vacation_strips_at():
+    m = member(0, "Иван", user_id=1, username="ivanov", vacation_until="2026-08-05")
+    assert m.get_mention("2026-08-03") == "Иван"
+
+def test_member_list_text_vacation_strips_at():
+    from ppbot.daily import member_list_text
+    m = [
+        member(0, "Иван", username="ivanov", vacation_until="2026-08-05"),
+        member(1, "Пётр", username="petrov"),
+    ]
+    text = member_list_text(m, today="2026-08-03")
+    assert "1. Иван (в отпуске до 05.08.2026)" in text
+    assert "2. @petrov" in text
