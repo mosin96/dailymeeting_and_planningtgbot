@@ -122,7 +122,7 @@ def create_router() -> Router:
     @r.callback_query(F.data == PREFIX_ADD)
     async def add_member_callback(callback: CallbackQuery, state: FSMContext):
         await state.set_state(AddMember.waiting)
-        await callback.message.answer("Пришлите @username или перешлите сообщение участника")
+        await callback.message.answer("Пришлите имя участника (например: «Иван @ivanov»)")
         await callback.answer()
 
     @r.callback_query(F.data == PREFIX_REMOVE_LIST)
@@ -147,35 +147,31 @@ def create_router() -> Router:
     async def add_member_input(message: Message, state: FSMContext, daily: DailyRegistry, tz, workdays=None):
         chat_id = message.chat.id
         members = await daily.get_members(chat_id)
-        new_member = None
-        if message.reply_to_message and message.reply_to_message.from_user:
-            new_member = _member_from_user(message.reply_to_message.from_user)
-        else:
-            text = (message.text or "").strip()
-            if text.startswith("@"):
-                username = text[1:]
-                existing = [m for m in members if m.username == username]
-                if existing:
-                    await message.answer("Уже в команде")
-                    await state.clear()
-                    return
-                new_member = DailyMember(chat_id=chat_id, position=len(members), first_name=username, username=username)
-            elif text:
-                existing = [m for m in members if m.first_name == text]
-                if existing:
-                    await message.answer("Уже в команде")
-                    await state.clear()
-                    return
-                new_member = DailyMember(chat_id=chat_id, position=len(members), first_name=text)
-
-        if new_member is None:
-            await message.answer("Не понял. Пришлите @username или перешлите сообщение участника")
+        text = (message.text or "").strip()
+        if not text:
+            await message.answer("Пришлите имя участника (например: «Иван @ivanov»)")
             return
 
-        if new_member.user_id is not None and any(m.user_id == new_member.user_id for m in members):
+        # Parse @username from the string
+        username = None
+        match = re.search(r"@(\w+)", text)
+        if match:
+            username = match.group(1)
+
+        # Check for duplicates
+        if username:
+            existing = [m for m in members if m.username == username]
+            if existing:
+                await message.answer("Уже в команде")
+                await state.clear()
+                return
+        existing = [m for m in members if m.first_name == text]
+        if existing:
             await message.answer("Уже в команде")
             await state.clear()
             return
+
+        new_member = DailyMember(chat_id=chat_id, position=len(members), first_name=text, username=username)
 
         new_member.chat_id = chat_id
         new_member.position = len(members)
