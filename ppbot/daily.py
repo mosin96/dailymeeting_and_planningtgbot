@@ -44,6 +44,16 @@ class DailyMember:
             return "@{}".format(self.username)
         return self.first_name
 
+    def get_display_name(self, today=None) -> str:
+        if today is not None and self.is_on_vacation(today):
+            return self.first_name
+        return self.display_name
+
+    def get_mention(self, today=None) -> str:
+        if today is not None and self.is_on_vacation(today):
+            return self.first_name
+        return self.mention
+
     @property
     def plain_name(self) -> str:
         return self.first_name
@@ -292,7 +302,7 @@ def apply_substitute(
     return (
         b_pos,
         a_pos,
-        "Сегодня ведёт {}, в следующий рабочий день {}".format(b_member.display_name, a_member.display_name),
+        "Сегодня ведёт {}, в следующий рабочий день {}".format(b_member.get_display_name(today), a_member.get_display_name(today)),
         None,
     )
 
@@ -344,7 +354,7 @@ def member_list_text(members: List[DailyMember], today: str) -> str:
         return "Команда пуста. Добавьте участников через /team"
     lines = []
     for m in members:
-        line = "{}. {}".format(m.position + 1, m.display_name)
+        line = "{}. {}".format(m.position + 1, m.get_display_name(today))
         if m.is_on_vacation(today):
             line += " (в отпуске до {})".format(format_ru_date(m.vacation_until))
         lines.append(line)
