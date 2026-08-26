@@ -135,7 +135,7 @@ async def test_substitute_button_today_b_tomorrow_a(dp, bot, session, storage):
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @b, в следующий рабочий день @a" in edits[0]["text"]
+    assert "Сегодня ведёт B, в следующий рабочий день A" in edits[0]["text"]
 
     # KEY INVERSION vs the old list-swap: members order NEVER changes
     members = await storage.get_members(-1001)
@@ -178,7 +178,7 @@ async def test_substitute_button_spans_weekend(dp, bot, session, storage, monkey
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @b, в следующий рабочий день @a" in edits[0]["text"]
+    assert "Сегодня ведёт B, в следующий рабочий день A" in edits[0]["text"]
 
     schedule = await storage.get_schedule(-1001)
     assert schedule[friday.isoformat()] == 1
@@ -222,7 +222,7 @@ async def test_roster_change_uses_calendar(dp, bot, session, storage):
     await feed(dp, bot, storage, Update(update_id=2, message=msg))
 
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["A", "B", "C", "dave"]
+    assert [m.first_name for m in members] == ["A", "B", "C", "@dave"]
 
     schedule = await storage.get_schedule(-1001)
     assert schedule, "rebuilt window is empty"
@@ -256,7 +256,7 @@ async def test_substitute_button_with_stale_next_index(dp, bot, session, storage
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @b, в следующий рабочий день @a" in edits[0]["text"]
+    assert "Сегодня ведёт B, в следующий рабочий день A" in edits[0]["text"]
 
     members = await storage.get_members(-1001)
     assert [m.first_name for m in members] == ["A", "B", "C"]
@@ -282,7 +282,7 @@ async def test_substitute_command_with_reminder_sent(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @b, в следующий рабочий день @a" in sends[0]["text"]
+    assert "Сегодня ведёт B, в следующий рабочий день A" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert [m.first_name for m in members] == ["A", "B", "C"]
     schedule = await storage.get_schedule(-1001)
@@ -299,7 +299,7 @@ async def test_skip_button_repicks_leader(dp, bot, session, storage):
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Пропуск принят. Сегодня ведёт @b" in edits[0]["text"]
+    assert "Пропуск принят. Сегодня ведёт B" in edits[0]["text"]
 
     members = await storage.get_members(-1001)
     assert members[0].skip_date == today_str()
@@ -319,7 +319,7 @@ async def test_substitute_button_works_without_reminder_fired(dp, bot, session, 
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @b, в следующий рабочий день @a" in edits[0]["text"]
+    assert "Сегодня ведёт B, в следующий рабочий день A" in edits[0]["text"]
 
     answers = [p for m, p in session.calls if m == "answerCallbackQuery"]
     assert not any(("устарело" in (a.get("text") or "")) for a in answers)
@@ -348,7 +348,7 @@ async def test_who_command_shows_leader_with_buttons(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @a" in sends[0]["text"]
+    assert "Сегодня ведёт A" in sends[0]["text"]
     markup = sends[0]["reply_markup"]
     assert markup is not None
 
@@ -361,8 +361,8 @@ async def test_who_shows_tomorrow_leader(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @a" in sends[0]["text"]
-    assert "Завтра ведёт @b" in sends[0]["text"]
+    assert "Сегодня ведёт A" in sends[0]["text"]
+    assert "Завтра ведёт B" in sends[0]["text"]
 
 
 @pytest.mark.asyncio
@@ -379,10 +379,10 @@ async def test_who_shows_vacationers(dp, bot, session, storage):
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
     text = sends[0]["text"]
-    assert "Сегодня ведёт @a" in text
+    assert "Сегодня ведёт A" in text
     assert "В отпуске: B" in text
     assert "@b" not in text
-    assert "Завтра ведёт @c" in text
+    assert "Завтра ведёт C" in text
 
 
 @pytest.mark.asyncio
@@ -432,7 +432,7 @@ async def test_who_follows_schedule_not_stale_next_index(dp, bot, session, stora
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @c" in sends[0]["text"]
+    assert "Сегодня ведёт C" in sends[0]["text"]
     assert "@a" not in sends[0]["text"]
 
 
@@ -449,7 +449,7 @@ async def test_substitute_command(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @b, в следующий рабочий день @a" in sends[0]["text"]
+    assert "Сегодня ведёт B, в следующий рабочий день A" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert [m.first_name for m in members] == ["A", "B", "C"]
     assert [m.position for m in members] == [0, 1, 2]
@@ -515,7 +515,7 @@ async def test_time_command_valid_and_invalid(dp, bot, session, storage):
 
 
 @pytest.mark.asyncio
-async def test_team_add_by_reply_and_duplicate_rejected(dp, bot, session, storage):
+async def test_team_add_by_text_and_duplicate_rejected(dp, bot, session, storage):
     await seed(storage)
     session.calls.clear()
 
@@ -523,8 +523,7 @@ async def test_team_add_by_reply_and_duplicate_rejected(dp, bot, session, storag
     await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
     session.calls.clear()
 
-    replied = make_message("/start", message_id=200, user_id=99, username="dave", first_name="Dave")
-    msg = make_message("reply-add", message_id=201, user_id=11, username="bob", first_name="Bob", reply_to=replied)
+    msg = make_message("Dave", message_id=201, user_id=11, username="bob", first_name="Bob")
     await feed(dp, bot, storage, Update(update_id=2, message=msg))
     members = await storage.get_members(-1001)
     assert len(members) == 4
@@ -535,7 +534,7 @@ async def test_team_add_by_reply_and_duplicate_rejected(dp, bot, session, storag
     await feed(dp, bot, storage, Update(update_id=3, callback_query=cb2))
     session.calls.clear()
 
-    dup = make_message("reply-dup", message_id=202, user_id=11, username="bob", first_name="Bob", reply_to=replied)
+    dup = make_message("Dave", message_id=202, user_id=11, username="bob", first_name="Bob")
     await feed(dp, bot, storage, Update(update_id=4, message=dup))
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert any("Уже в команде" in s.get("text", "") for s in sends)
@@ -574,7 +573,7 @@ async def test_substitute_button_works_for_user_id_none_members(dp, bot, session
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @Никита, в следующий рабочий день @testuser" in edits[0]["text"]
+    assert "Сегодня ведёт Никита, в следующий рабочий день testuser" in edits[0]["text"]
     # member order unchanged; schedule rows swapped (position-driven, works
     # for user_id=None members)
     members = await storage.get_members(-1001)
@@ -598,7 +597,7 @@ async def test_skip_button_works_for_user_id_none_members(dp, bot, session, stor
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Пропуск принят. Сегодня ведёт @Никита" in edits[0]["text"]
+    assert "Пропуск принят. Сегодня ведёт Никита" in edits[0]["text"]
     members = await storage.get_members(-1001)
     assert members[0].skip_date == today_str()
 
@@ -652,7 +651,7 @@ def test_build_member_picker_markup_carries_positions():
         for btn in row
     ]
     assert flat[0] == ("👑 A", "daily:lead:0")
-    assert flat[1] == ("👑 @testuser", "daily:lead:1")
+    assert flat[1] == ("👑 testuser", "daily:lead:1")
     assert flat[-1] == ("🔙 Назад", "daily:menu")
 
 
@@ -674,7 +673,7 @@ async def test_setleader_command_by_username(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @b" in sends[0]["text"]
+    assert "Сегодня ведёт B" in sends[0]["text"]
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1  # points at B, no queue reorder
     members = await storage.get_members(-1001)
@@ -689,7 +688,7 @@ async def test_setleader_command_without_at_sign(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @b" in sends[0]["text"]
+    assert "Сегодня ведёт B" in sends[0]["text"]
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1
 
@@ -703,7 +702,7 @@ async def test_setleader_command_by_reply(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "Сегодня ведёт @b" in sends[0]["text"]
+    assert "Сегодня ведёт B" in sends[0]["text"]
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1
 
@@ -771,7 +770,7 @@ async def test_leader_picker_selects_member(dp, bot, session, storage):
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @b" in edits[0]["text"]
+    assert "Сегодня ведёт B" in edits[0]["text"]
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1
     members = await storage.get_members(-1001)
@@ -803,7 +802,7 @@ async def test_vacation_command_sets_date(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "@b в отпуске до 05.08.2026" in sends[0]["text"]
+    assert "B в отпуске до 05.08.2026" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert members[1].vacation_until == "2026-08-05"
 
@@ -816,7 +815,7 @@ async def test_vacation_command_iso_date(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "@b в отпуске до 05.08.2026" in sends[0]["text"]
+    assert "B в отпуске до 05.08.2026" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert members[1].vacation_until == "2026-08-05"
 
@@ -830,7 +829,7 @@ async def test_vacation_command_by_reply(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "@c в отпуске до 05.08.2026" in sends[0]["text"]
+    assert "C в отпуске до 05.08.2026" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert members[2].vacation_until == "2026-08-05"
 
@@ -843,7 +842,7 @@ async def test_vacation_command_sets_range(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "@b в отпуске с 01.08.2026 по 10.08.2026" in sends[0]["text"]
+    assert "B в отпуске с 01.08.2026 по 10.08.2026" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert members[1].vacation_start == "2026-08-01"
     assert members[1].vacation_until == "2026-08-10"
@@ -858,7 +857,7 @@ async def test_vacation_command_clear(dp, bot, session, storage):
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "@b вернулся в ротацию" in sends[0]["text"]
+    assert "B вернулся в ротацию" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert members[1].vacation_until is None
     assert members[1].vacation_start is None
@@ -917,7 +916,7 @@ async def test_vacation_command_starts_fsm_without_date(dp, bot, session, storag
     await feed(dp, bot, storage, Update(update_id=2, message=msg2))
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "@b в отпуске до 05.08.2026" in sends[0]["text"]
+    assert "B в отпуске до 05.08.2026" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert members[1].vacation_until == "2026-08-05"
 
@@ -940,7 +939,7 @@ async def test_vacation_fsm_invalid_then_valid(dp, bot, session, storage):
     msg3 = make_message("06.08.2026")
     await feed(dp, bot, storage, Update(update_id=3, message=msg3))
     sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert any("@b в отпуске до 06.08.2026" in s.get("text", "") for s in sends)
+    assert any("B в отпуске до 06.08.2026" in s.get("text", "") for s in sends)
     members = await storage.get_members(-1001)
     assert members[1].vacation_until == "2026-08-06"
 
@@ -956,7 +955,7 @@ async def test_vacation_fsm_sets_range(dp, bot, session, storage):
     await feed(dp, bot, storage, Update(update_id=2, message=msg2))
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "@b в отпуске с 01.08.2026 по 10.08.2026" in sends[0]["text"]
+    assert "B в отпуске с 01.08.2026 по 10.08.2026" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert members[1].vacation_start == "2026-08-01"
     assert members[1].vacation_until == "2026-08-10"
@@ -980,7 +979,7 @@ async def test_vacation_fsm_clear(dp, bot, session, storage):
     await feed(dp, bot, storage, Update(update_id=2, message=msg2))
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
-    assert "@b вернулся в ротацию" in sends[0]["text"]
+    assert "B вернулся в ротацию" in sends[0]["text"]
     members = await storage.get_members(-1001)
     assert members[1].vacation_until is None
 
@@ -1010,7 +1009,7 @@ async def test_vacation_picker_opens_and_selects(dp, bot, session, storage):
     msg2 = make_message("05.08.2026", user_id=11)  # same user as the picker callback (FSM key)
     await feed(dp, bot, storage, Update(update_id=3, message=msg2))
     sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert any("@b в отпуске до 05.08.2026" in s.get("text", "") for s in sends)
+    assert any("B в отпуске до 05.08.2026" in s.get("text", "") for s in sends)
     members = await storage.get_members(-1001)
     assert members[1].vacation_until == "2026-08-05"
 
@@ -1123,7 +1122,7 @@ async def test_who_callback_edits_in_place(dp, bot, session, storage):
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @a" in edits[0]["text"]
+    assert "Сегодня ведёт A" in edits[0]["text"]
     assert not [p for m, p in session.calls if m == "sendMessage"]
 
 
@@ -1146,7 +1145,7 @@ async def test_who_on_nonworkday_shows_nearest_workday_leader(dp, bot, session, 
     text = edits[0]["text"]
     assert "нерабочий день" in text
     assert "Ближайший дейлик" in text
-    assert "@b" in text
+    assert "B" in text
 
 
 @pytest.mark.asyncio
@@ -1188,7 +1187,7 @@ async def test_menu_on_nonworkday(dp, bot, session, storage, monkeypatch):
     text = edits[0]["text"]
     assert "🚫 Сегодня нерабочий день" in text
     assert "📅 Ближайший дейлик" in text
-    assert "@b" in text
+    assert "B" in text
     markup = edits[0]["reply_markup"]
     flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
     assert flat == ["daily:team", "daily:time", "daily:who", "daily:help", "daily:lead", "daily:vac"]

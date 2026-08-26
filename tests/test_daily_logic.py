@@ -189,7 +189,7 @@ def test_substitute_message_uses_display_name():
     b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
     assert err is None
     assert (b_pos, a_pos) == (1, 0)
-    assert msg == "Сегодня ведёт @bob, в следующий рабочий день @alice"
+    assert msg == "Сегодня ведёт Боб, в следующий рабочий день Алиса"
 
 
 def test_skip_marks_and_repicks_leader():
@@ -283,7 +283,7 @@ def test_is_unavailable_combines_skip_and_vacation():
 def test_plain_name_returns_first_name_even_with_username():
     m = member(0, "Иван", username="ivanov")
     assert m.plain_name == "Иван"
-    assert m.display_name == "@ivanov"
+    assert m.display_name == "Иван"
 
 
 def test_parse_vacation_date_ru_format():
@@ -614,11 +614,11 @@ def test_get_display_name_vacation_strips_at():
 
 def test_get_display_name_vacation_over_keeps_at():
     m = member(0, "Иван", username="ivanov", vacation_until="2026-08-02")
-    assert m.get_display_name("2026-08-03") == "@ivanov"
+    assert m.get_display_name("2026-08-03") == "Иван"
 
 def test_get_display_name_no_vacation_keeps_at():
     m = member(0, "Иван", username="ivanov")
-    assert m.get_display_name("2026-08-03") == "@ivanov"
+    assert m.get_display_name("2026-08-03") == "Иван"
 
 def test_get_display_name_no_username_returns_first_name():
     m = member(0, "Иван")
@@ -626,7 +626,7 @@ def test_get_display_name_no_username_returns_first_name():
 
 def test_get_display_name_none_today_returns_display_name():
     m = member(0, "Иван", username="ivanov")
-    assert m.get_display_name(None) == "@ivanov"
+    assert m.get_display_name(None) == "Иван"
 
 def test_get_mention_vacation_strips_at():
     m = member(0, "Иван", user_id=1, username="ivanov", vacation_until="2026-08-05")
@@ -640,4 +640,40 @@ def test_member_list_text_vacation_strips_at():
     ]
     text = member_list_text(m, today="2026-08-03")
     assert "1. Иван (в отпуске до 05.08.2026)" in text
-    assert "2. @petrov" in text
+    assert "2. Пётр" in text
+
+
+def test_display_name_returns_full_string():
+    """display_name returns first_name as-is, including @username."""
+    m = member(0, name="Иван @ivanov", username="ivanov")
+    assert m.display_name == "Иван @ivanov"
+
+
+def test_get_display_name_vacation_strips_at_from_string():
+    """On vacation, get_display_name strips @username from name string."""
+    m = member(0, name="Иван @ivanov", username="ivanov", vacation_until="2026-08-10")
+    assert m.get_display_name("2026-08-05") == "Иван"
+
+
+def test_get_display_name_not_vacation_keeps_full_string():
+    """Not on vacation, get_display_name returns full name string."""
+    m = member(0, name="Иван @ivanov", username="ivanov", vacation_until="2026-08-01")
+    assert m.get_display_name("2026-08-05") == "Иван @ivanov"
+
+
+def test_plain_name_strips_at():
+    """plain_name strips @username from name string."""
+    m = member(0, name="Иван @ivanov", username="ivanov")
+    assert m.plain_name == "Иван"
+
+
+def test_plain_name_at_only_returns_username():
+    """plain_name with only @username returns username without @."""
+    m = member(0, name="@ivanov", username="ivanov")
+    assert m.plain_name == "ivanov"
+
+
+def test_strip_username_no_match():
+    """_strip_username returns text unchanged when no @username to strip."""
+    m = member(0, name="Иван")
+    assert m._strip_username("Иван") == "Иван"
