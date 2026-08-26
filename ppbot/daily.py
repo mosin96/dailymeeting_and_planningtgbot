@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import datetime
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 VACATION_DATE_RE = re.compile(r"(\d{1,2})[./](\d{1,2})[./](\d{4})")
 ISO_DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 VACATION_RANGE_RE = re.compile(r"^(\d{1,2})[./](\d{1,2})[./](\d{4})-(\d{1,2})[./](\d{1,2})[./](\d{4})$")
+_AT_HANDLE_RE = re.compile(r"@\w+")
 
 SCHEDULE_DAYS = 14
 
@@ -18,9 +19,8 @@ SCHEDULE_DAYS = 14
 class DailyMember:
     chat_id: int
     position: int
-    first_name: str
+    username: str
     user_id: Optional[int] = None
-    username: Optional[str] = None
     skip_date: Optional[str] = None
     vacation_until: Optional[str] = None
     vacation_start: Optional[str] = None
@@ -38,52 +38,47 @@ class DailyMember:
     def is_unavailable(self, today: str) -> bool:
         return self.is_skipped(today) or self.is_on_vacation(today)
 
-    def _strip_username(self, text: str) -> str:
-        """Strip @username from a name string."""
-        if self.username:
-            return text.replace("@{}".format(self.username), "").strip()
-        return text
+    @staticmethod
+    def _strip_at_handle(text: str) -> str:
+        """Strip @handle (e.g. @ivanov) from a name string."""
+        stripped = _AT_HANDLE_RE.sub("", text).strip()
+        return stripped if stripped else text
 
     @property
     def display_name(self) -> str:
-        if self.username:
-            at_part = "@{}".format(self.username)
-            if at_part in self.first_name:
-                return self.first_name  # new freeform: "Иван @ivanov"
-            return at_part  # old format compatibility: "@ivanov"
-        return self.first_name
+        return self.username
 
     def get_display_name(self, today=None) -> str:
         if today is not None and self.is_on_vacation(today):
-            return self._strip_username(self.first_name)
+            return self._strip_at_handle(self.username)
         return self.display_name
 
     def get_mention(self, today=None) -> str:
         if today is not None and self.is_on_vacation(today):
-            return self._strip_username(self.first_name)
+            return self._strip_at_handle(self.username)
         return self.mention
 
     @property
     def plain_name(self) -> str:
-        if self.username:
-            stripped = self.first_name.replace("@{}".format(self.username), "").strip()
-            return stripped if stripped else self.username
-        return self.first_name
+        return self._strip_at_handle(self.username)
 
     @property
     def mention(self) -> str:
-        """Telegram-parseable mention: @username, tg://user link, or plain name.
-
-        The bot sends with HTML parse mode, so members without a username get
-        a clickable user link instead of a bare name.
-        """
-        if self.user_id is not None and not self.username:
+        """Telegram-parseable mention: @handle, tg://user link, or plain name."""
+        m = _AT_HANDLE_RE.search(self.username)
+        if m:
+            return m.group(0)
+        if self.user_id is not None:
             return '<a href="tg://user?id={}">{}</a>'.format(
-                self.user_id, escape(self.first_name)
+                self.user_id, escape(self.username)
             )
-        if self.username:
-            return "@{}".format(self.username)
-        return self.first_name
+        return self.username
+
+    @property
+    def at_handle(self) -> Optional[str]:
+        """Extract @handle from username, or None."""
+        m = _AT_HANDLE_RE.search(self.username)
+        return m.group(0) if m else None
 
     def to_dict(self) -> dict:
         return {
@@ -91,7 +86,6 @@ class DailyMember:
             "position": self.position,
             "user_id": self.user_id,
             "username": self.username,
-            "first_name": self.first_name,
             "skip_date": self.skip_date,
             "vacation_until": self.vacation_until,
             "vacation_start": self.vacation_start,
@@ -99,12 +93,25 @@ class DailyMember:
 
     @classmethod
     def from_dict(cls, dct: dict) -> "DailyMember":
+        # Backward compat: old dicts have first_name + optional username
+        if "first_name" in dct and "username" not in dct:
+            name = dct["first_name"]
+        elif "first_name" in dct and "username" in dct:
+            fn = dct["first_name"]
+            un = dct["username"]
+            if un and fn != un:
+                name = "{} @{}".format(fn, un)
+            elif un:
+                name = "@{}".format(un)
+            else:
+                name = fn
+        else:
+            name = dct.get("username", "")
         return cls(
             chat_id=dct["chat_id"],
             position=dct["position"],
-            first_name=dct["first_name"],
+            username=name,
             user_id=dct.get("user_id"),
-            username=dct.get("username"),
             skip_date=dct.get("skip_date"),
             vacation_until=dct.get("vacation_until"),
             vacation_start=dct.get("vacation_start"),

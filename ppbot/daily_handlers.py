@@ -67,26 +67,20 @@ class ResetChat(StatesGroup):
     confirm = State()
 
 
-def _member_from_user(user: User) -> DailyMember:
-    return DailyMember(
-        chat_id=0,
-        position=-1,
-        first_name=user.first_name or user.username or str(user.id),
-        user_id=user.id,
-        username=user.username,
-    )
-
-
 def _resolve_member(members: List[DailyMember], text: str) -> Optional[DailyMember]:
-    """Resolve a member by '@username', plain username, or exact first_name."""
-    text = (text or "").strip().lstrip("@")
+    text = (text or "").strip()
     if not text:
         return None
+    stripped = text.lstrip("@")
     for m in members:
-        if m.username and m.username == text:
+        if m.username == text or m.username == stripped:
             return m
     for m in members:
-        if m.first_name == text:
+        handle = m.at_handle
+        if handle and handle.lstrip("@") == stripped:
+            return m
+    for m in members:
+        if stripped in m.username:
             return m
     return None
 
@@ -152,26 +146,14 @@ def create_router() -> Router:
             await message.answer("Пришлите имя участника (например: «Иван @ivanov»)")
             return
 
-        # Parse @username from the string
-        username = None
-        match = re.search(r"@(\w+)", text)
-        if match:
-            username = match.group(1)
-
         # Check for duplicates
-        if username:
-            existing = [m for m in members if m.username == username]
-            if existing:
-                await message.answer("Уже в команде")
-                await state.clear()
-                return
-        existing = [m for m in members if m.first_name == text]
+        existing = [m for m in members if m.username == text]
         if existing:
             await message.answer("Уже в команде")
             await state.clear()
             return
 
-        new_member = DailyMember(chat_id=chat_id, position=len(members), first_name=text, username=username)
+        new_member = DailyMember(chat_id=chat_id, position=len(members), username=text)
 
         new_member.chat_id = chat_id
         new_member.position = len(members)

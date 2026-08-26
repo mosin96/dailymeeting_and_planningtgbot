@@ -64,7 +64,7 @@ async def seed(storage, chat_id=-1001, last_reminder_date=None, next_index=0):
     await storage.upsert_chat(chat)
     for i, name in enumerate(["A", "B", "C"]):
         await storage.add_member(
-            DailyMember(chat_id=chat_id, position=i, first_name=name, user_id=1 + i, username=name.lower())
+            DailyMember(chat_id=chat_id, position=i, user_id=1 + i, username=f"@{name.lower()}")
         )
     return chat
 
@@ -139,7 +139,7 @@ async def test_substitute_button_today_b_tomorrow_a(dp, bot, session, storage):
 
     # KEY INVERSION vs the old list-swap: members order NEVER changes
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["A", "B", "C"]
+    assert [m.username for m in members] == ["@a", "@b", "@c"]
     assert [m.position for m in members] == [0, 1, 2]
     # only the schedule rows swap: today -> B (1), next workday -> A (0)
     schedule = await storage.get_schedule(-1001)
@@ -222,7 +222,7 @@ async def test_roster_change_uses_calendar(dp, bot, session, storage):
     await feed(dp, bot, storage, Update(update_id=2, message=msg))
 
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["A", "B", "C", "@dave"]
+    assert [m.username for m in members] == ["@a", "@b", "@c", "@dave"]
 
     schedule = await storage.get_schedule(-1001)
     assert schedule, "rebuilt window is empty"
@@ -259,7 +259,7 @@ async def test_substitute_button_with_stale_next_index(dp, bot, session, storage
     assert "Сегодня ведёт @b, в следующий рабочий день @a" in edits[0]["text"]
 
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["A", "B", "C"]
+    assert [m.username for m in members] == ["@a", "@b", "@c"]
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1  # b_pos: B leads today
     schedule = await storage.get_schedule(-1001)
@@ -284,7 +284,7 @@ async def test_substitute_command_with_reminder_sent(dp, bot, session, storage):
     assert len(sends) == 1
     assert "Сегодня ведёт @b, в следующий рабочий день @a" in sends[0]["text"]
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["A", "B", "C"]
+    assert [m.username for m in members] == ["@a", "@b", "@c"]
     schedule = await storage.get_schedule(-1001)
     assert schedule[today_str()] == 1
     assert schedule[tomorrow_str()] == 0
@@ -330,7 +330,7 @@ async def test_substitute_single_member_rejected(dp, bot, session, storage):
     """Single-member team: schedule[today] == schedule[tomorrow] (both 0)
     -> a_pos == b_pos -> error surfaces via the callback answer, not an edit."""
     await storage.upsert_chat(DailyChat(chat_id=-1001, last_reminder_date=today_str()))
-    await storage.add_member(DailyMember(chat_id=-1001, position=0, first_name="Solo", user_id=1))
+    await storage.add_member(DailyMember(chat_id=-1001, position=0, username="Solo", user_id=1))
     msg = make_message("original")
     cb = make_callback(msg, "daily:sub:0")
     await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
@@ -380,8 +380,7 @@ async def test_who_shows_vacationers(dp, bot, session, storage):
     assert len(sends) == 1
     text = sends[0]["text"]
     assert "Сегодня ведёт @a" in text
-    assert "В отпуске: B" in text
-    assert "@b" not in text
+    assert "В отпуске: @b" in text
     assert "Завтра ведёт @c" in text
 
 
@@ -451,7 +450,7 @@ async def test_substitute_command(dp, bot, session, storage):
     assert len(sends) == 1
     assert "Сегодня ведёт @b, в следующий рабочий день @a" in sends[0]["text"]
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["A", "B", "C"]
+    assert [m.username for m in members] == ["@a", "@b", "@c"]
     assert [m.position for m in members] == [0, 1, 2]
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1  # b_pos: B leads today
@@ -485,7 +484,7 @@ async def test_daily_menu_counts_out_vacationers(dp, bot, session, storage):
     assert len(sends) == 1
     text = sends[0]["text"]
     assert "Участников: 2 из 3" in text
-    assert "В отпуске: B (до {})".format(until_dt.strftime("%d.%m.%Y")) in text
+    assert "В отпуске: @b (до {})".format(until_dt.strftime("%d.%m.%Y")) in text
     assert "Сегодня ведёт:" in text
 
 
@@ -527,7 +526,7 @@ async def test_team_add_by_text_and_duplicate_rejected(dp, bot, session, storage
     await feed(dp, bot, storage, Update(update_id=2, message=msg))
     members = await storage.get_members(-1001)
     assert len(members) == 4
-    assert members[3].first_name == "Dave"
+    assert members[3].username == "Dave"
     session.calls.clear()
 
     cb2 = make_callback(make_message("x"), "daily:add", user_id=11)
@@ -549,13 +548,13 @@ async def test_substitute_button_works_for_user_id_none_members(dp, bot, session
     substitute/skip callbacks match and work."""
     chat = DailyChat(chat_id=-1001, last_reminder_date=today_str(), next_index=0)
     await storage.upsert_chat(chat)
-    await storage.add_member(DailyMember(chat_id=-1001, position=0, first_name="testuser", username="testuser"))
-    await storage.add_member(DailyMember(chat_id=-1001, position=1, first_name="Никита", username="Никита"))
+    await storage.add_member(DailyMember(chat_id=-1001, position=0, user_id=None, username="@testuser"))
+    await storage.add_member(DailyMember(chat_id=-1001, position=1, user_id=None, username="@НИтка"))
     rows = [
         ((datetime.date.fromisoformat(today_str()) + datetime.timedelta(days=i)).isoformat(), i % 2)
         for i in range(15)
     ]
-    await storage.set_schedule(-1001, rows)  # today -> 0 (testuser), tomorrow -> 1 (Никита)
+    await storage.set_schedule(-1001, rows)  # today -> 0 (testuser), tomorrow -> 1 (НИтка)
 
     from ppbot.daily_ui import build_reminder_markup
     from ppbot.daily import next_leader
@@ -573,11 +572,11 @@ async def test_substitute_button_works_for_user_id_none_members(dp, bot, session
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Сегодня ведёт @Никита, в следующий рабочий день @testuser" in edits[0]["text"]
+    assert "Сегодня ведёт @НИтка, в следующий рабочий день @testuser" in edits[0]["text"]
     # member order unchanged; schedule rows swapped (position-driven, works
     # for user_id=None members)
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["testuser", "Никита"]
+    assert [m.username for m in members] == ["@testuser", "@НИтка"]
     schedule = await storage.get_schedule(-1001)
     assert schedule[today_str()] == 1
     assert schedule[tomorrow_str()] == 0
@@ -588,8 +587,8 @@ async def test_skip_button_works_for_user_id_none_members(dp, bot, session, stor
     """Regression (live bug): skip button must work for user_id=None members."""
     chat = DailyChat(chat_id=-1001, last_reminder_date=today_str(), next_index=0)
     await storage.upsert_chat(chat)
-    await storage.add_member(DailyMember(chat_id=-1001, position=0, first_name="testuser", username="testuser"))
-    await storage.add_member(DailyMember(chat_id=-1001, position=1, first_name="Никита", username="Никита"))
+    await storage.add_member(DailyMember(chat_id=-1001, position=0, user_id=None, username="@testuser"))
+    await storage.add_member(DailyMember(chat_id=-1001, position=1, user_id=None, username="@НИтка"))
 
     msg = make_message("original")
     cb = make_callback(msg, "daily:skip:0", user_id=2)
@@ -597,7 +596,7 @@ async def test_skip_button_works_for_user_id_none_members(dp, bot, session, stor
 
     edits = [p for m, p in session.calls if m == "editMessageText"]
     assert len(edits) == 1
-    assert "Пропуск принят. Сегодня ведёт @Никита" in edits[0]["text"]
+    assert "Пропуск принят. Сегодня ведёт @НИтка" in edits[0]["text"]
     members = await storage.get_members(-1001)
     assert members[0].skip_date == today_str()
 
@@ -609,7 +608,7 @@ async def test_team_remove_reindexes(dp, bot, session, storage):
     await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
 
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["A", "C"]
+    assert [m.username for m in members] == ["@a", "@c"]
     assert [m.position for m in members] == [0, 1]
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1  # 2 > 1 -> decremented
@@ -641,8 +640,8 @@ def test_build_member_picker_markup_carries_positions():
     from ppbot.daily import DailyMember
 
     members = [
-        DailyMember(chat_id=-1001, position=0, first_name="A", user_id=1),
-        DailyMember(chat_id=-1001, position=1, first_name="testuser", username="testuser"),
+        DailyMember(chat_id=-1001, position=0, user_id=1, username="A"),
+        DailyMember(chat_id=-1001, position=1, user_id=None, username="@testuser"),
     ]
     markup = build_member_picker_markup(members, PREFIX_LEAD)
     flat = [
@@ -677,7 +676,7 @@ async def test_setleader_command_by_username(dp, bot, session, storage):
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1  # points at B, no queue reorder
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["A", "B", "C"]  # order untouched
+    assert [m.username for m in members] == ["@a", "@b", "@c"]  # order untouched
 
 
 @pytest.mark.asyncio
@@ -774,7 +773,7 @@ async def test_leader_picker_selects_member(dp, bot, session, storage):
     chat = await storage.get_chat(-1001)
     assert chat.next_index == 1
     members = await storage.get_members(-1001)
-    assert [m.first_name for m in members] == ["A", "B", "C"]
+    assert [m.username for m in members] == ["@a", "@b", "@c"]
 
 
 @pytest.mark.asyncio
@@ -1034,7 +1033,7 @@ async def test_setleader_then_vacationed_member_skipped_in_rotation(dp, bot, ses
 
     members = await storage.get_members(-1001)
     leader = next_leader(members, 1, today_str())
-    assert leader.first_name == "C"
+    assert leader.username == "@c"
 
 
 @pytest.mark.asyncio

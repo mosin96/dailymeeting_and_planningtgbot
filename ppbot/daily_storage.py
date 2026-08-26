@@ -167,19 +167,30 @@ class DailyRegistry:
         )
         async with self._db.execute(query, (chat_id,)) as cursor:
             rows = await cursor.fetchall()
-        return [
-            DailyMember(
+        result = []
+        for r in rows:
+            db_username = r[3]
+            db_first_name = r[4]
+            if db_username and not db_first_name:
+                name = db_username
+            elif db_first_name and not db_username:
+                name = db_first_name
+            elif db_first_name and db_username and db_first_name != db_username:
+                name = "{} @{}".format(db_first_name, db_username)
+            elif db_first_name:
+                name = db_first_name
+            else:
+                name = db_username or ""
+            result.append(DailyMember(
                 chat_id=r[0],
                 position=r[1],
                 user_id=r[2],
-                username=r[3],
-                first_name=r[4],
+                username=name,
                 skip_date=r[5],
                 vacation_until=r[6],
                 vacation_start=r[7],
-            )
-            for r in rows
-        ]
+            ))
+        return result
 
     async def replace_members(self, chat_id: int, members: List[DailyMember]):
         async with self._db.execute("BEGIN"):
@@ -188,7 +199,7 @@ class DailyRegistry:
                 "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date, vacation_until, vacation_start) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (m.chat_id, m.position, m.user_id, m.username, m.first_name, m.skip_date, m.vacation_until, m.vacation_start)
+                    (m.chat_id, m.position, m.user_id, m.username, m.username, m.skip_date, m.vacation_until, m.vacation_start)
                     for m in members
                 ],
             )
@@ -198,7 +209,7 @@ class DailyRegistry:
         await self._db.execute(
             "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date, vacation_until, vacation_start) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (member.chat_id, member.position, member.user_id, member.username, member.first_name, member.skip_date, member.vacation_until, member.vacation_start),
+            (member.chat_id, member.position, member.user_id, member.username, member.username, member.skip_date, member.vacation_until, member.vacation_start),
         )
         await self._db.commit()
 

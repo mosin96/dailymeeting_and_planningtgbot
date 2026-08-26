@@ -139,7 +139,7 @@ async def seed_chat(storage, chat_id=1, members=3, next_index=0, daily_time="10:
     ))
     for i in range(members):
         await storage.add_member(
-            DailyMember(chat_id=chat_id, position=i, first_name=f"U{i}", user_id=100 + i, username=f"u{i}")
+            DailyMember(chat_id=chat_id, position=i, username=f"U{i} @u{i}", user_id=100 + i)
         )
 
 
@@ -305,7 +305,7 @@ async def test_loop_rebuilds_schedule_from_next_index(storage):
 
 @pytest.mark.asyncio
 async def test_loop_mentions_vacationers_without_at(storage):
-    """Vacation notice appended to the reminder; vacationer NOT tagged with @."""
+    """Vacation notice appended to the reminder; vacationer listed by plain_name only."""
     from ppbot.scheduler import reminder_loop
 
     await seed_chat(storage, members=3)

@@ -24,9 +24,8 @@ def member(
     return DailyMember(
         chat_id=1,
         position=pos,
-        first_name=name,
+        username=username or name,
         user_id=user_id,
-        username=username,
         skip_date=skip_date,
         vacation_until=vacation_until,
         vacation_start=vacation_start,
@@ -34,7 +33,7 @@ def member(
 
 
 def names(members):
-    return [m.first_name for m in members]
+    return [m.username for m in members]
 
 
 def test_leader_with_skipped_first():
@@ -45,7 +44,7 @@ def test_leader_with_skipped_first():
     ]
     leader = next_leader(m, 0, "2026-08-03")
     assert leader is not None
-    assert leader.first_name == "B"
+    assert leader.username == "B"
 
 
 def test_all_skipped_returns_none():
@@ -175,15 +174,15 @@ def test_substitute_guardrail_members_never_reordered():
     schedule = {"2026-08-03": 0, "2026-08-04": 1, "2026-08-05": 2}
     b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
     assert err is None
-    assert [x.first_name for x in m] == ["A", "B", "C"]
+    assert [x.username for x in m] == ["A", "B", "C"]
     assert [x.position for x in m] == [0, 1, 2]
     assert all(a is b for a, b in zip(m, before))
 
 
 def test_substitute_message_uses_display_name():
     m = [
-        member(0, "Алиса", user_id=1, username="alice"),
-        member(1, "Боб", user_id=2, username="bob"),
+        member(0, "Алиса", user_id=1, username="@alice"),
+        member(1, "Боб", user_id=2, username="@bob"),
     ]
     schedule = {"2026-08-03": 0, "2026-08-04": 1}
     b_pos, a_pos, msg, err = apply_substitute(schedule, m, "2026-08-03", "2026-08-04")
@@ -201,13 +200,13 @@ def test_skip_marks_and_repicks_leader():
     new_members, new_next, new_leader, err = apply_skip(m, 0, 0, "2026-08-03")
     assert err is None
     assert new_members[0].skip_date == "2026-08-03"
-    assert new_leader.first_name == "B"
+    assert new_leader.username == "B"
     assert new_next == 1  # points AT the new leader B (position 1)
 
     # B was never advanced; if B skips too, next is C
     m2, next2, leader2, err2 = apply_skip(m, 0, 1, "2026-08-03")
     assert err2 is None
-    assert leader2.first_name == "C"
+    assert leader2.username == "C"
     assert next2 == 2  # points AT the new leader C (position 2)
 
 
@@ -227,7 +226,7 @@ def test_skip_date_yesterday_is_active():
         member(1, "B", user_id=2),
     ]
     leader = next_leader(m, 0, "2026-08-03")
-    assert leader.first_name == "A"
+    assert leader.username == "A"
 
 
 def test_leader_none_on_empty():
@@ -280,10 +279,10 @@ def test_is_unavailable_combines_skip_and_vacation():
     assert vacationer.is_unavailable("2026-08-06") is False
 
 
-def test_plain_name_returns_first_name_even_with_username():
-    m = member(0, "Иван", username="ivanov")
+def test_plain_name_strips_at_from_creation_text():
+    m = member(0, "Иван @ivanов")
     assert m.plain_name == "Иван"
-    assert m.display_name == "@ivanov"
+    assert m.display_name == "Иван @ivanов"
 
 
 def test_parse_vacation_date_ru_format():
@@ -403,7 +402,7 @@ def test_next_leader_skips_vacationer():
     ]
     leader = next_leader(m, 0, "2026-08-03")
     assert leader is not None
-    assert leader.first_name == "B"
+    assert leader.username == "B"
 
 
 def test_all_on_vacation_returns_none():
@@ -421,7 +420,7 @@ def test_vacationer_returns_before_today_leader_available():
         member(1, "B", user_id=2),
     ]
     leader = next_leader(m, 0, "2026-08-03")
-    assert leader.first_name == "A"
+    assert leader.username == "A"
 
 
 def test_substitute_skips_vacationer_as_b():
@@ -448,7 +447,7 @@ def test_skip_repick_skips_vacationer():
     ]
     _, new_next, new_leader, err = apply_skip(m, 0, 0, "2026-08-03")
     assert err is None
-    assert new_leader.first_name == "C"
+    assert new_leader.username == "C"
     assert new_next == 2
 
 
@@ -472,7 +471,7 @@ def test_set_leader_points_next_index_and_keeps_order():
     new_next, err = set_leader(m, 0, 1, "2026-08-03")
     assert err is None
     assert new_next == 1
-    assert [x.first_name for x in m] == ["A", "B", "C"]  # no reorder
+    assert [x.username for x in m] == ["A", "B", "C"]  # no reorder
 
 
 def test_set_leader_tomorrow_continues_after_chosen():
@@ -487,7 +486,7 @@ def test_set_leader_tomorrow_continues_after_chosen():
     # today B leads; at 23:59 advance past B -> C
     next_for_tomorrow = advance_next(m, new_next)
     assert next_for_tomorrow == 2
-    assert m[next_for_tomorrow].first_name == "C"
+    assert m[next_for_tomorrow].username == "C"
 
 
 def test_set_leader_rejects_vacationer():
@@ -609,71 +608,71 @@ def test_next_scheduled_date_returns_none_when_absent():
 
 
 def test_get_display_name_vacation_strips_at():
-    m = member(0, "Иван", username="ivanov", vacation_until="2026-08-05")
+    m = member(0, "Иван @ivanов", vacation_until="2026-08-05")
     assert m.get_display_name("2026-08-03") == "Иван"
 
 def test_get_display_name_vacation_over_keeps_at():
-    m = member(0, "Иван", username="ivanov", vacation_until="2026-08-02")
-    assert m.get_display_name("2026-08-03") == "@ivanov"
+    m = member(0, "Иван @ivanов", vacation_until="2026-08-02")
+    assert m.get_display_name("2026-08-03") == "Иван @ivanов"
 
 def test_get_display_name_no_vacation_keeps_at():
-    m = member(0, "Иван", username="ivanov")
-    assert m.get_display_name("2026-08-03") == "@ivanov"
+    m = member(0, "Иван @ivanов")
+    assert m.get_display_name("2026-08-03") == "Иван @ivanов"
 
 def test_get_display_name_no_username_returns_first_name():
     m = member(0, "Иван")
     assert m.get_display_name("2026-08-03") == "Иван"
 
 def test_get_display_name_none_today_returns_display_name():
-    m = member(0, "Иван", username="ivanov")
-    assert m.get_display_name(None) == "@ivanov"
+    m = member(0, "Иван @ivanов")
+    assert m.get_display_name(None) == "Иван @ivanов"
 
 def test_get_mention_vacation_strips_at():
-    m = member(0, "Иван", user_id=1, username="ivanov", vacation_until="2026-08-05")
+    m = member(0, "Иван @ivanов", user_id=1, vacation_until="2026-08-05")
     assert m.get_mention("2026-08-03") == "Иван"
 
 def test_member_list_text_vacation_strips_at():
     from ppbot.daily import member_list_text
     m = [
-        member(0, "Иван", username="ivanov", vacation_until="2026-08-05"),
-        member(1, "Пётр", username="petrov"),
+        member(0, "Иван @ivanов", vacation_until="2026-08-05"),
+        member(1, "Пётр @petров"),
     ]
     text = member_list_text(m, today="2026-08-03")
     assert "1. Иван (в отпуске до 05.08.2026)" in text
-    assert "2. @petrov" in text
+    assert "2. Пётр @petров" in text
 
 
 def test_display_name_returns_full_string():
-    """display_name returns first_name as-is, including @username."""
-    m = member(0, name="Иван @ivanov", username="ivanov")
-    assert m.display_name == "Иван @ivanov"
+    """display_name returns username as-is, including @username."""
+    m = member(0, "Иван @ivanов")
+    assert m.display_name == "Иван @ivanов"
 
 
 def test_get_display_name_vacation_strips_at_from_string():
     """On vacation, get_display_name strips @username from name string."""
-    m = member(0, name="Иван @ivanov", username="ivanov", vacation_until="2026-08-10")
+    m = member(0, "Иван @ivanов", vacation_until="2026-08-10")
     assert m.get_display_name("2026-08-05") == "Иван"
 
 
 def test_get_display_name_not_vacation_keeps_full_string():
     """Not on vacation, get_display_name returns full name string."""
-    m = member(0, name="Иван @ivanov", username="ivanov", vacation_until="2026-08-01")
-    assert m.get_display_name("2026-08-05") == "Иван @ivanov"
+    m = member(0, "Иван @ivanов", vacation_until="2026-08-01")
+    assert m.get_display_name("2026-08-05") == "Иван @ivanов"
 
 
 def test_plain_name_strips_at():
-    """plain_name strips @username from name string."""
-    m = member(0, name="Иван @ivanov", username="ivanov")
+    """plain_name strips @handle from name string."""
+    m = member(0, "Иван @ivanов")
     assert m.plain_name == "Иван"
 
 
 def test_plain_name_at_only_returns_username():
-    """plain_name with only @username returns username without @."""
-    m = member(0, name="@ivanov", username="ivanov")
-    assert m.plain_name == "ivanov"
+    """plain_name with only @handle returns @handle as-is."""
+    m = member(0, "@ivanов")
+    assert m.plain_name == "@ivanов"
 
 
-def test_strip_username_no_match():
-    """_strip_username returns text unchanged when no @username to strip."""
-    m = member(0, name="Иван")
-    assert m._strip_username("Иван") == "Иван"
+def test_strip_at_handle_no_match():
+    """_strip_at_handle returns text unchanged when no @handle to strip."""
+    m = member(0, "Иван")
+    assert m._strip_at_handle("Иван") == "Иван"

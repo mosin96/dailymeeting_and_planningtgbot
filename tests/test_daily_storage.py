@@ -17,26 +17,23 @@ async def registry(tmp_path):
 
 
 def member(chat_id, pos, name="X", user_id=None, username=None, skip_date=None, vacation_until=None, vacation_start=None):
+    display = username if username else name
     m = DailyMember(
         chat_id=chat_id,
         position=pos,
-        first_name=name,
+        username=display,
         user_id=user_id,
-        username=username,
         skip_date=skip_date,
         vacation_until=vacation_until,
+        vacation_start=vacation_start,
     )
-    # T1 adds the vacation_start field to DailyMember in parallel; setattr keeps
-    # this helper working in both timelines until that field lands.
-    if vacation_start is not None:
-        m.vacation_start = vacation_start
     return m
 
 
 async def seed(registry, chat_id=1, n=3):
     for i in range(n):
         await registry.add_member(
-            member(chat_id, i, f"U{i}", user_id=100 + i, username=f"u{i}")
+            member(chat_id, i, f"U{i}", user_id=100 + i, username=f"@u{i}")
         )
 
 
@@ -76,7 +73,7 @@ class TestMembers:
         await seed(registry)
         members = await registry.get_members(1)
         assert [m.position for m in members] == [0, 1, 2]
-        assert [m.first_name for m in members] == ["U0", "U1", "U2"]
+        assert [m.username for m in members] == ["@u0", "@u1", "@u2"]
 
     async def test_replace_members(self, registry):
         await seed(registry, n=2)
@@ -86,7 +83,7 @@ class TestMembers:
         ]
         await registry.replace_members(1, new)
         members = await registry.get_members(1)
-        assert [m.first_name for m in members] == ["X", "Y"]
+        assert [m.username for m in members] == ["X", "Y"]
         # only chat 1 members replaced
         await seed(registry, chat_id=2, n=1)
         assert len(await registry.get_members(2)) == 1
@@ -97,7 +94,7 @@ class TestMembers:
         await registry.remove_member(1, 1)  # remove U1 (position 1)
         members = await registry.get_members(1)
         assert [m.position for m in members] == [0, 1]
-        assert [m.first_name for m in members] == ["U0", "U2"]
+        assert [m.username for m in members] == ["@u0", "@u2"]
         # next_index 2 > removed position 1 -> becomes 1 (not below 0)
         chat = await registry.get_chat(1)
         assert chat.next_index == 1
@@ -108,7 +105,7 @@ class TestMembers:
         await registry.remove_member(1, 0)
         members = await registry.get_members(1)
         assert [m.position for m in members] == [0, 1]
-        assert [m.first_name for m in members] == ["U1", "U2"]
+        assert [m.username for m in members] == ["@u1", "@u2"]
         chat = await registry.get_chat(1)
         assert chat.next_index == 0  # not decremented below 0
 
