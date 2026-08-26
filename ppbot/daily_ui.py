@@ -84,7 +84,7 @@ def build_member_picker_markup(members: List[DailyMember], prefix: str) -> Inlin
     rows = [
         [
             InlineKeyboardButton(
-                text="{} {}".format(("👑" if prefix == PREFIX_LEAD else "🏖"), m.display_name),
+                text="{} {}".format(("👑" if prefix == PREFIX_LEAD else "🏖"), m.get_display_name()),
                 callback_data="{}{}".format(prefix, m.position),
             )
         ]
@@ -100,7 +100,7 @@ def build_remove_markup(members: List[DailyMember]) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                text="❌ {}".format(m.display_name),
+                text="❌ {}".format(m.get_display_name()),
                 callback_data="{}{}".format(PREFIX_REMOVE, m.position),
             )
         ]
@@ -141,7 +141,7 @@ async def show_menu(message: Message, daily: DailyRegistry, tz, workdays=None, e
     today = today_in_tz(tz)
     schedule = await _ensure_today_schedule(daily, chat, members, today, workdays=workdays)
     leader = await _schedule_leader(schedule, members, str(today))
-    leader_str = leader.display_name if leader else "—"
+    leader_str = leader.get_display_name(str(today)) if leader else "—"
     vacationers = [m for m in members if m.is_on_vacation(str(today))]
     available = len(members) - len(vacationers)
     count_str = "{} из {}".format(available, len(members)) if vacationers else str(available)
@@ -164,7 +164,7 @@ async def show_menu(message: Message, daily: DailyRegistry, tz, workdays=None, e
         if nxt is not None:
             nxt_member = await _schedule_leader(schedule, members, nxt)
         if nxt is not None and nxt_member is not None:
-            text += "\n📅 Ближайший дейлик: {}, ведёт {}".format(format_ru_date(nxt), nxt_member.display_name)
+            text += "\n📅 Ближайший дейлик: {}, ведёт {}".format(format_ru_date(nxt), nxt_member.get_display_name(str(today)))
     else:
         text += "👤 Сегодня ведёт: {leader}".format(leader=leader_str)
         if leader is None:
@@ -227,7 +227,7 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, workdays=None, e
                 if nxt is not None:
                     nxt_member = await _schedule_leader(schedule, members, nxt)
                 if nxt is not None and nxt_member is not None:
-                    text += "\nБлижайший дейлик: {}, ведёт {}".format(format_ru_date(nxt), nxt_member.display_name)
+                    text += "\nБлижайший дейлик: {}, ведёт {}".format(format_ru_date(nxt), nxt_member.get_display_name(today_s))
             else:
                 text = "Все пропущены сегодня, дейлик отменён"
         if edit:
@@ -236,7 +236,7 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, workdays=None, e
             await message.answer(text)
         return
 
-    text = "Сегодня ведёт {}".format(leader.display_name)
+    text = "Сегодня ведёт {}".format(leader.get_display_name(today_s))
     vacationers = [m for m in members if m.is_on_vacation(today_s)]
     if vacationers:
         parts = ", ".join(
@@ -249,7 +249,7 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, workdays=None, e
             schedule, members, str(today + datetime.timedelta(days=1))
         )
         if tomorrow_leader is not None:
-            text += "\nЗавтра ведёт {}".format(tomorrow_leader.display_name)
+            text += "\nЗавтра ведёт {}".format(tomorrow_leader.get_display_name(today_s))
     markup = build_reminder_markup(leader, show_menu=True)
     if edit:
         await message.edit_text(text, reply_markup=markup)

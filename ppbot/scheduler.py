@@ -42,7 +42,7 @@ def parse_time(value: str) -> datetime.time:
 
 
 def reminder_text(leader, members, today) -> str:
-    text = "Сегодня ведущий - {}".format(leader.mention)
+    text = "Сегодня ведущий - {}".format(leader.get_mention(today))
     vacationers = [m for m in members if m.is_on_vacation(today)]
     if vacationers:
         parts = ", ".join(

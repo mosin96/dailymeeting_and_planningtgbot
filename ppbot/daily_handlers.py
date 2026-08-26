@@ -299,7 +299,7 @@ def create_router() -> Router:
             await callback.message.edit_text("Все пропущены сегодня, дейлик отменён")
         else:
             await callback.message.edit_text(
-                "Пропуск принят. Сегодня ведёт {}".format(new_leader.display_name)
+                "Пропуск принят. Сегодня ведёт {}".format(new_leader.get_display_name(today))
             )
         await callback.answer()
 
@@ -364,7 +364,7 @@ def create_router() -> Router:
         await _refresh_schedule(daily, callback.message.chat.id, tz, workdays=wd)
         chosen = next((m for m in members if m.position == position), None)
         await callback.message.edit_text(
-            "Сегодня ведёт {}".format(chosen.display_name if chosen else "")
+            "Сегодня ведёт {}".format(chosen.get_display_name(today) if chosen else "")
         )
         await callback.answer()
 
@@ -398,7 +398,7 @@ def create_router() -> Router:
         await daily.upsert_chat(chat)
         wd = workdays.is_workday if workdays is not None else None
         await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
-        await message.answer("Сегодня ведёт {}".format(member.display_name))
+        await message.answer("Сегодня ведёт {}".format(member.get_display_name(today)))
 
     # ---- vacation ----
 
@@ -452,7 +452,7 @@ def create_router() -> Router:
         if date_part in ("снять", "нет", "0"):
             await daily.update_member_vacation(message.chat.id, member.position, None, None)
             await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
-            await message.answer("{} вернулся в ротацию".format(member.display_name))
+            await message.answer("{} вернулся в ротацию".format(member.get_display_name(str(today_in_tz(tz)))))
             return
         if date_part:
             parsed = parse_vacation_range(date_part)
@@ -466,12 +466,12 @@ def create_router() -> Router:
             await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
             if start is None:
                 await message.answer(
-                    "{} в отпуске до {}".format(member.display_name, format_ru_date(end))
+                    "{} в отпуске до {}".format(member.get_display_name(str(today_in_tz(tz))), format_ru_date(end))
                 )
             else:
                 await message.answer(
                     "{} в отпуске с {} по {}".format(
-                        member.display_name, format_ru_date(start), format_ru_date(end)
+                        member.get_display_name(str(today_in_tz(tz))), format_ru_date(start), format_ru_date(end)
                     )
                 )
             return
@@ -494,7 +494,7 @@ def create_router() -> Router:
         if text in ("снять", "нет", "0"):
             await daily.update_member_vacation(message.chat.id, member.position, None, None)
             await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
-            await message.answer("{} вернулся в ротацию".format(member.display_name))
+            await message.answer("{} вернулся в ротацию".format(member.get_display_name(str(today_in_tz(tz)))))
             await state.clear()
             return
         parsed = parse_vacation_range(text)
@@ -508,12 +508,12 @@ def create_router() -> Router:
         await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
         if start is None:
             await message.answer(
-                "{} в отпуске до {}".format(member.display_name, format_ru_date(end))
+                "{} в отпуске до {}".format(member.get_display_name(str(today_in_tz(tz))), format_ru_date(end))
             )
         else:
             await message.answer(
                 "{} в отпуске с {} по {}".format(
-                    member.display_name, format_ru_date(start), format_ru_date(end)
+                    member.get_display_name(str(today_in_tz(tz))), format_ru_date(start), format_ru_date(end)
                 )
             )
         await state.clear()
