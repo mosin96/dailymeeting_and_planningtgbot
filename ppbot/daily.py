@@ -38,24 +38,31 @@ class DailyMember:
     def is_unavailable(self, today: str) -> bool:
         return self.is_skipped(today) or self.is_on_vacation(today)
 
+    def _strip_username(self, text: str) -> str:
+        """Strip @username from a name string."""
+        if self.username:
+            return text.replace("@{}".format(self.username), "").strip()
+        return text
+
     @property
     def display_name(self) -> str:
-        if self.username:
-            return "@{}".format(self.username)
         return self.first_name
 
     def get_display_name(self, today=None) -> str:
         if today is not None and self.is_on_vacation(today):
-            return self.first_name
+            return self._strip_username(self.first_name)
         return self.display_name
 
     def get_mention(self, today=None) -> str:
         if today is not None and self.is_on_vacation(today):
-            return self.first_name
+            return self._strip_username(self.first_name)
         return self.mention
 
     @property
     def plain_name(self) -> str:
+        if self.username:
+            stripped = self.first_name.replace("@{}".format(self.username), "").strip()
+            return stripped if stripped else self.username
         return self.first_name
 
     @property
@@ -69,7 +76,9 @@ class DailyMember:
             return '<a href="tg://user?id={}">{}</a>'.format(
                 self.user_id, escape(self.first_name)
             )
-        return self.display_name
+        if self.username:
+            return "@{}".format(self.username)
+        return self.first_name
 
     def to_dict(self) -> dict:
         return {
