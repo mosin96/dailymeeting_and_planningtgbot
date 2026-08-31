@@ -180,7 +180,7 @@ async def _process_chat(
 
         if in_window and await should_send_cost_reminder_weekly(chat, today, workday_client):
             try:
-                await bot.send_message(chat_id=chat.chat_id, text="Не забудьте списать трудозатраты!")
+                await bot.send_message(chat_id=chat.chat_id, text="Не забудьте списать трудозатраты за неделю! Хороших выходных!")
             except TelegramBadRequest as exc:
                 logger.warning("chat %s unavailable: %s", chat.chat_id, exc)
             chat.cost_reminder_last_week_date = today_s

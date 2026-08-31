@@ -48,7 +48,7 @@ The `/daily` menu also has two quick-action buttons:
 - **«Выбрать ведущего»** — opens a member picker to manually set today's leader.
 - **«Отпуск»** — opens a member picker to set a member's vacation (single date or date range).
 
-The `/daily` menu also has a **«Напомн. о трудозатратах»** quick-action button that opens a settings menu for work-hours logging reminders: a toggle to enable/disable (`/costremind`) and a reminder time (default 17:00). On the last workday of the week the bot sends «Не забудьте списать трудозатраты!», and on the last workday of the month «Не забудьте списать трудозатраты за месяц!» (last workday determined via the RU production calendar, isdayoff.ru). The «Отпуск» member picker also has a **«Планируемые отпуска»** button (and a direct `/vacplan` command) that shows future vacations (с ДД.ММ.ГГГГ по ДД.ММ.ГГГГ).
+The `/daily` menu also has a **«Напомн. о трудозатратах»** quick-action button that opens a settings menu for work-hours logging reminders: a toggle to enable/disable (`/costremind`) and a reminder time (default 17:00). On the last workday of the week the bot sends «Не забудьте списать трудозатраты за неделю! Хороших выходных!», and on the last workday of the month «Не забудьте списать трудозатраты за месяц!» (last workday determined via the RU production calendar, isdayoff.ru). The «Отпуск» member picker also has a **«Планируемые отпуска»** button (and a direct `/vacplan` command) that shows future vacations (с ДД.ММ.ГГГГ по ДД.ММ.ГГГГ).
 
 ### Manual leader override
 `/setleader @ник` (or reply to a member's message, or pick from the `/daily` menu) makes the chosen member lead **today**. The rotation continues from the member after them — the queue order is not changed.

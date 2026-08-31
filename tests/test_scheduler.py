@@ -635,7 +635,7 @@ async def test_loop_sends_cost_reminder_weekly(storage):
     await run_one_iteration(reminder_loop, bot, storage, MON_FRI, FakeClock([now]))
 
     texts = [m["text"] for m in bot.sent]
-    assert "Не забудьте списать трудозатраты!" in texts
+    assert "Не забудьте списать трудозатраты за неделю! Хороших выходных!" in texts
     chat = await storage.get_chat(1)
     assert chat.cost_reminder_last_week_date == str(today)
 
@@ -669,7 +669,7 @@ async def test_loop_sends_both_on_same_day(storage):
     await run_one_iteration(reminder_loop, bot, storage, single_wd, FakeClock([now]))
 
     texts = [m["text"] for m in bot.sent]
-    assert "Не забудьте списать трудозатраты!" in texts
+    assert "Не забудьте списать трудозатраты за неделю! Хороших выходных!" in texts
     assert "Не забудьте списать трудозатраты за месяц!" in texts
     assert len([t for t in texts if "трудозатрат" in t]) == 2
     chat = await storage.get_chat(1)
