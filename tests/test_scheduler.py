@@ -14,6 +14,10 @@ import pytest
 from ppbot.daily import DailyChat, DailyMember
 from ppbot.daily_storage import DailyRegistry
 from ppbot.scheduler import (
+    last_workday_of_month,
+    last_workday_of_week,
+    should_send_cost_reminder_monthly,
+    should_send_cost_reminder_weekly,
     should_send_reminder,
     should_send_start,
 )
@@ -465,3 +469,281 @@ async def test_loop_passes_real_calendar_into_schedule(storage):
 
     today = datetime.date(2026, 8, 3)
     assert any(d > today for d in spy.asked), sorted({str(d) for d in spy.asked})
+
+
+def cost_chat(**kwargs):
+    defaults = dict(
+        chat_id=1,
+        daily_time="10:00",
+        next_index=0,
+        cost_reminder_enabled=False,
+        cost_reminder_time="17:00",
+        cost_reminder_last_week_date=None,
+        cost_reminder_last_month_date=None,
+    )
+    defaults.update(kwargs)
+    return DailyChat(**defaults)
+
+
+MON_FRI = FakeCalendar(lambda d: d.weekday() < 5)
+ALL_WORKDAYS = FakeWorkdays(True)
+
+
+@pytest.mark.asyncio
+async def test_last_workday_of_week_friday():
+    fri = datetime.date(2026, 8, 7)
+    assert await last_workday_of_week(fri, MON_FRI) == fri
+
+
+@pytest.mark.asyncio
+async def test_last_workday_of_week_working_saturday():
+    saturday_workday = FakeCalendar(lambda d: d.weekday() < 6)
+    sat = datetime.date(2026, 8, 8)
+    assert await last_workday_of_week(sat, saturday_workday) == sat
+
+
+@pytest.mark.asyncio
+async def test_last_workday_of_week_early_week():
+    mon = datetime.date(2026, 8, 3)
+    result = await last_workday_of_week(mon, MON_FRI)
+    assert result == datetime.date(2026, 8, 7)
+
+
+@pytest.mark.asyncio
+async def test_last_workday_of_week_sunday():
+    sun = datetime.date(2026, 8, 9)
+    result = await last_workday_of_week(sun, MON_FRI)
+    assert result == datetime.date(2026, 8, 7)
+
+
+@pytest.mark.asyncio
+async def test_last_workday_of_week_all_workdays():
+    fri = datetime.date(2026, 8, 7)
+    result = await last_workday_of_week(fri, ALL_WORKDAYS)
+    assert result == datetime.date(2026, 8, 9)
+
+
+@pytest.mark.asyncio
+async def test_last_workday_of_week_early_week_all_workdays():
+    wed = datetime.date(2026, 8, 5)
+    result = await last_workday_of_week(wed, ALL_WORKDAYS)
+    assert result == datetime.date(2026, 8, 9)
+
+
+@pytest.mark.asyncio
+async def test_last_workday_of_month_last_day():
+    last_day = datetime.date(2026, 8, 31)
+    assert await last_workday_of_month(last_day, MON_FRI) == last_day
+
+
+@pytest.mark.asyncio
+async def test_last_workday_of_month_mid_month():
+    mid = datetime.date(2026, 8, 15)
+    result = await last_workday_of_month(mid, MON_FRI)
+    assert result == datetime.date(2026, 8, 31)
+
+
+@pytest.mark.asyncio
+async def test_last_workday_of_month_all_workdays():
+    mid = datetime.date(2026, 8, 15)
+    result = await last_workday_of_month(mid, ALL_WORKDAYS)
+    assert result == datetime.date(2026, 8, 31)
+
+
+@pytest.mark.asyncio
+async def test_should_send_cost_reminder_weekly_enabled_last_workday():
+    chat_obj = cost_chat(cost_reminder_enabled=True)
+    fri = datetime.date(2026, 8, 7)
+    assert await should_send_cost_reminder_weekly(chat_obj, fri, MON_FRI) is True
+
+
+@pytest.mark.asyncio
+async def test_should_send_cost_reminder_weekly_disabled():
+    chat_obj = cost_chat(cost_reminder_enabled=False)
+    fri = datetime.date(2026, 8, 7)
+    assert await should_send_cost_reminder_weekly(chat_obj, fri, MON_FRI) is False
+
+
+@pytest.mark.asyncio
+async def test_should_send_cost_reminder_weekly_already_sent():
+    chat_obj = cost_chat(cost_reminder_enabled=True, cost_reminder_last_week_date="2026-08-07")
+    fri = datetime.date(2026, 8, 7)
+    assert await should_send_cost_reminder_weekly(chat_obj, fri, MON_FRI) is False
+
+
+@pytest.mark.asyncio
+async def test_should_send_cost_reminder_weekly_not_last_workday():
+    chat_obj = cost_chat(cost_reminder_enabled=True)
+    mon = datetime.date(2026, 8, 3)
+    assert await should_send_cost_reminder_weekly(chat_obj, mon, MON_FRI) is False
+
+
+@pytest.mark.asyncio
+async def test_should_send_cost_reminder_monthly_enabled_last_workday():
+    chat_obj = cost_chat(cost_reminder_enabled=True)
+    last_day = datetime.date(2026, 8, 31)
+    assert await should_send_cost_reminder_monthly(chat_obj, last_day, MON_FRI) is True
+
+
+@pytest.mark.asyncio
+async def test_should_send_cost_reminder_monthly_disabled():
+    chat_obj = cost_chat(cost_reminder_enabled=False)
+    last_day = datetime.date(2026, 8, 31)
+    assert await should_send_cost_reminder_monthly(chat_obj, last_day, MON_FRI) is False
+
+
+@pytest.mark.asyncio
+async def test_should_send_cost_reminder_monthly_already_sent():
+    chat_obj = cost_chat(cost_reminder_enabled=True, cost_reminder_last_month_date="2026-08-31")
+    last_day = datetime.date(2026, 8, 31)
+    assert await should_send_cost_reminder_monthly(chat_obj, last_day, MON_FRI) is False
+
+
+@pytest.mark.asyncio
+async def test_should_send_cost_reminder_monthly_not_last_workday():
+    chat_obj = cost_chat(cost_reminder_enabled=True)
+    mid = datetime.date(2026, 8, 15)
+    assert await should_send_cost_reminder_monthly(chat_obj, mid, MON_FRI) is False
+
+
+async def seed_cost_chat(storage, **kwargs):
+    defaults = dict(
+        chat_id=1,
+        daily_time="10:00",
+        next_index=0,
+        cost_reminder_enabled=True,
+        cost_reminder_time="17:00",
+        cost_reminder_last_week_date=None,
+        cost_reminder_last_month_date=None,
+    )
+    defaults.update(kwargs)
+    await storage.upsert_chat(DailyChat(**defaults))
+    for i in range(3):
+        await storage.add_member(
+            DailyMember(chat_id=1, position=i, username=f"U{i} @u{i}", user_id=100 + i)
+        )
+
+
+@pytest.mark.asyncio
+async def test_loop_sends_cost_reminder_weekly(storage):
+    from ppbot.scheduler import reminder_loop
+
+    today = datetime.date(2026, 8, 7)
+    await seed_cost_chat(storage)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 7, 17, 30)
+    await run_one_iteration(reminder_loop, bot, storage, MON_FRI, FakeClock([now]))
+
+    texts = [m["text"] for m in bot.sent]
+    assert "Не забудьте списать трудозатраты!" in texts
+    chat = await storage.get_chat(1)
+    assert chat.cost_reminder_last_week_date == str(today)
+
+
+@pytest.mark.asyncio
+async def test_loop_sends_cost_reminder_monthly(storage):
+    from ppbot.scheduler import reminder_loop
+
+    today = datetime.date(2026, 8, 31)
+    await seed_cost_chat(storage)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 31, 17, 0)
+    await run_one_iteration(reminder_loop, bot, storage, MON_FRI, FakeClock([now]))
+
+    texts = [m["text"] for m in bot.sent]
+    assert "Не забудьте списать трудозатраты за месяц!" in texts
+    chat = await storage.get_chat(1)
+    assert chat.cost_reminder_last_month_date == str(today)
+
+
+@pytest.mark.asyncio
+async def test_loop_sends_both_on_same_day(storage):
+    from ppbot.scheduler import reminder_loop
+
+    single_wd = FakeCalendar(lambda d: d == datetime.date(2026, 8, 28))
+    today = datetime.date(2026, 8, 28)
+
+    await seed_cost_chat(storage)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 28, 17, 15)
+    await run_one_iteration(reminder_loop, bot, storage, single_wd, FakeClock([now]))
+
+    texts = [m["text"] for m in bot.sent]
+    assert "Не забудьте списать трудозатраты!" in texts
+    assert "Не забудьте списать трудозатраты за месяц!" in texts
+    assert len([t for t in texts if "трудозатрат" in t]) == 2
+    chat = await storage.get_chat(1)
+    assert chat.cost_reminder_last_week_date == str(today)
+    assert chat.cost_reminder_last_month_date == str(today)
+
+
+@pytest.mark.asyncio
+async def test_loop_no_cost_reminder_when_disabled(storage):
+    from ppbot.scheduler import reminder_loop
+
+    await seed_cost_chat(storage, cost_reminder_enabled=False)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 7, 17, 30)
+    await run_one_iteration(reminder_loop, bot, storage, MON_FRI, FakeClock([now]))
+
+    texts = [m["text"] for m in bot.sent]
+    assert not any("трудозатрат" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_loop_cost_reminder_updates_last_date(storage):
+    from ppbot.scheduler import reminder_loop
+
+    single_wd = FakeCalendar(lambda d: d == datetime.date(2026, 8, 28))
+    await seed_cost_chat(storage)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 28, 17, 0)
+    await run_one_iteration(reminder_loop, bot, storage, single_wd, FakeClock([now]))
+
+    chat = await storage.get_chat(1)
+    assert chat.cost_reminder_last_week_date == "2026-08-28"
+    assert chat.cost_reminder_last_month_date == "2026-08-28"
+
+
+@pytest.mark.asyncio
+async def test_loop_cost_reminder_not_on_nonworkday(storage):
+    from ppbot.scheduler import reminder_loop
+
+    await seed_cost_chat(storage)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 7, 17, 30)
+    await run_one_iteration(reminder_loop, bot, storage, FakeWorkdays(False), FakeClock([now]))
+
+    texts = [m["text"] for m in bot.sent]
+    assert not any("трудозатрат" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_loop_cost_reminder_outside_time_window(storage):
+    from ppbot.scheduler import reminder_loop
+
+    await seed_cost_chat(storage)
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 7, 18, 1)
+    await run_one_iteration(reminder_loop, bot, storage, MON_FRI, FakeClock([now]))
+
+    texts = [m["text"] for m in bot.sent]
+    assert not any("трудозатрат" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_loop_cost_reminder_already_sent_today(storage):
+    from ppbot.scheduler import reminder_loop
+
+    today_str = "2026-08-07"
+    await seed_cost_chat(
+        storage,
+        cost_reminder_last_week_date=today_str,
+        cost_reminder_last_month_date=today_str,
+    )
+    bot = FakeBot()
+    now = datetime.datetime(2026, 8, 7, 17, 30)
+    await run_one_iteration(reminder_loop, bot, storage, MON_FRI, FakeClock([now]))
+
+    texts = [m["text"] for m in bot.sent]
+    assert not any("трудозатрат" in t for t in texts)

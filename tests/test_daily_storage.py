@@ -225,6 +225,92 @@ class TestVacationStart:
         assert members[0].vacation_start == "2026-08-02"
 
 
+class TestCostReminderColumns:
+    async def test_all_four_columns_exist_on_fresh_db(self, registry):
+        async with registry._db.execute("PRAGMA table_info(daily_chats)") as cursor:
+            cols = [row[1] for row in await cursor.fetchall()]
+        assert "cost_reminder_enabled" in cols
+        assert "cost_reminder_time" in cols
+        assert "cost_reminder_last_week_date" in cols
+        assert "cost_reminder_last_month_date" in cols
+
+    async def test_default_values_on_fresh_insert(self, registry):
+        await registry.upsert_chat(DailyChat(chat_id=1))
+        async with registry._db.execute(
+            "SELECT cost_reminder_enabled, cost_reminder_time, "
+            "cost_reminder_last_week_date, cost_reminder_last_month_date "
+            "FROM daily_chats WHERE chat_id = 1"
+        ) as cursor:
+            row = await cursor.fetchone()
+        assert row[0] == 0
+        assert row[1] == "17:00"
+        assert row[2] is None
+        assert row[3] is None
+
+    async def test_upsert_get_roundtrip(self, registry):
+        chat = DailyChat(chat_id=1, daily_time="09:15", next_index=2, last_reminder_date="2026-08-03")
+        await registry.upsert_chat(chat)
+        loaded = await registry.get_chat(1)
+        assert loaded is not None
+        assert loaded.daily_time == "09:15"
+        assert loaded.next_index == 2
+        assert loaded.last_reminder_date == "2026-08-03"
+
+    async def test_upsert_get_cost_reminder_roundtrip(self, registry):
+        chat = DailyChat(
+            chat_id=1,
+            cost_reminder_enabled=True,
+            cost_reminder_time="18:30",
+            cost_reminder_last_week_date="2026-08-07",
+            cost_reminder_last_month_date="2026-08-28",
+        )
+        await registry.upsert_chat(chat)
+        loaded = await registry.get_chat(1)
+        assert loaded is not None
+        assert loaded.cost_reminder_enabled is True
+        assert loaded.cost_reminder_time == "18:30"
+        assert loaded.cost_reminder_last_week_date == "2026-08-07"
+        assert loaded.cost_reminder_last_month_date == "2026-08-28"
+
+    async def test_list_chats_includes_cost_reminder_values(self, registry):
+        await registry.upsert_chat(DailyChat(
+            chat_id=1,
+            cost_reminder_enabled=True,
+            cost_reminder_time="19:00",
+            cost_reminder_last_week_date="2026-08-07",
+            cost_reminder_last_month_date="2026-08-28",
+        ))
+        await registry.upsert_chat(DailyChat(chat_id=2))
+        chats = await registry.list_chats()
+        c1 = next(c for c in chats if c.chat_id == 1)
+        c2 = next(c for c in chats if c.chat_id == 2)
+        assert c1.cost_reminder_enabled is True
+        assert c1.cost_reminder_time == "19:00"
+        assert c1.cost_reminder_last_week_date == "2026-08-07"
+        assert c1.cost_reminder_last_month_date == "2026-08-28"
+        assert c2.cost_reminder_enabled is False
+        assert c2.cost_reminder_time == "17:00"
+        assert c2.cost_reminder_last_week_date is None
+        assert c2.cost_reminder_last_month_date is None
+
+    async def test_upsert_overwrites_cost_reminder(self, registry):
+        await registry.upsert_chat(DailyChat(
+            chat_id=1,
+            cost_reminder_enabled=True,
+            cost_reminder_time="18:00",
+        ))
+        await registry.upsert_chat(DailyChat(
+            chat_id=1,
+            cost_reminder_enabled=False,
+            cost_reminder_time="20:00",
+            cost_reminder_last_week_date="2026-08-07",
+        ))
+        loaded = await registry.get_chat(1)
+        assert loaded.cost_reminder_enabled is False
+        assert loaded.cost_reminder_time == "20:00"
+        assert loaded.cost_reminder_last_week_date == "2026-08-07"
+
+
 class TestSwapScheduleDates:
     BASE = datetime.date(2026, 8, 4)
 

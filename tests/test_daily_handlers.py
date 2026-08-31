@@ -662,6 +662,54 @@ def test_build_member_picker_markup_empty_members_still_has_back():
     assert flat == ["daily:menu"]
 
 
+def test_build_menu_markup_has_cost_remind_button():
+    from ppbot.daily_ui import build_menu_markup
+
+    markup = build_menu_markup()
+    flat = [
+        (btn.text, btn.callback_data)
+        for row in markup.inline_keyboard
+        for btn in row
+    ]
+    assert len(flat) == 7
+    assert ("Напомн. о трудозатратах", "daily:costremind") in flat
+    existing = {
+        ("Состав команды", "daily:team"),
+        ("Время дейлика", "daily:time"),
+        ("Кто сегодня ведёт", "daily:who"),
+        ("Справка", "daily:help"),
+        ("Выбрать ведущего", "daily:lead"),
+        ("Отпуск", "daily:vac"),
+    }
+    assert existing.issubset(set(flat))
+
+
+def test_build_cost_remind_settings_markup_enabled():
+    from ppbot.daily_ui import build_cost_remind_settings_markup
+
+    markup = build_cost_remind_settings_markup(True, "17:00")
+    flat = [
+        (btn.text, btn.callback_data)
+        for row in markup.inline_keyboard
+        for btn in row
+    ]
+    assert ("Выключить", "daily:costremind:toggle") in flat
+    assert ("Время: 17:00", "daily:costremind:settime") in flat
+    assert ("🔙 Назад", "daily:menu") in flat
+
+
+def test_build_cost_remind_settings_markup_disabled():
+    from ppbot.daily_ui import build_cost_remind_settings_markup
+
+    markup = build_cost_remind_settings_markup(False, "17:00")
+    flat = [
+        (btn.text, btn.callback_data)
+        for row in markup.inline_keyboard
+        for btn in row
+    ]
+    assert ("Включить", "daily:costremind:toggle") in flat
+
+
 # ---- T6: /setleader command and leader picker ----
 
 @pytest.mark.asyncio
@@ -1189,7 +1237,7 @@ async def test_menu_on_nonworkday(dp, bot, session, storage, monkeypatch):
     assert "@b" in text
     markup = edits[0]["reply_markup"]
     flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
-    assert flat == ["daily:team", "daily:time", "daily:who", "daily:help", "daily:lead", "daily:vac"]
+    assert flat == ["daily:team", "daily:time", "daily:who", "daily:help", "daily:lead", "daily:vac", "daily:costremind"]
 
 
 # ---- reset history ----
@@ -1246,3 +1294,251 @@ async def test_reset_executes_on_second_command(dp, bot, session, storage, game_
     assert await storage.get_members(-1001) == []
     assert await storage.get_chat(-1001) is None
     assert await game_storage.get_game(-1001, "100") is None
+
+
+# ---- cost-reminder settings handlers ----
+
+@pytest.mark.asyncio
+async def test_cost_reminder_button_shows_settings(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:costremind")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert "Напоминания о трудозатратах" in edits[0]["text"]
+    markup = edits[0]["reply_markup"]
+    flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
+    assert "daily:costremind:toggle" in flat
+    assert "daily:costremind:settime" in flat
+
+
+@pytest.mark.asyncio
+async def test_cost_reminder_toggle_on_off(dp, bot, session, storage):
+    await seed(storage)
+    chat = await storage.get_chat(-1001)
+    assert chat.cost_reminder_enabled is False
+
+    msg = make_message("original")
+    cb1 = make_callback(msg, "daily:costremind")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb1))
+
+    cb2 = make_callback(msg, "daily:costremind:toggle")
+    await feed(dp, bot, storage, Update(update_id=2, callback_query=cb2))
+
+    chat = await storage.get_chat(-1001)
+    assert chat.cost_reminder_enabled is True
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    markup = edits[-1]["reply_markup"]
+    flat = [btn["text"] for row in markup["inline_keyboard"] for btn in row]
+    assert "Выключить" in flat
+
+    cb3 = make_callback(msg, "daily:costremind:toggle")
+    await feed(dp, bot, storage, Update(update_id=3, callback_query=cb3))
+
+    chat = await storage.get_chat(-1001)
+    assert chat.cost_reminder_enabled is False
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    markup = edits[-1]["reply_markup"]
+    flat = [btn["text"] for row in markup["inline_keyboard"] for btn in row]
+    assert "Включить" in flat
+
+
+@pytest.mark.asyncio
+async def test_cost_reminder_set_time_valid(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:costremind:settime")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+    session.calls.clear()
+
+    msg2 = make_message("18:30", user_id=11, username="bob", first_name="Bob")
+    await feed(dp, bot, storage, Update(update_id=2, message=msg2))
+
+    chat = await storage.get_chat(-1001)
+    assert chat.cost_reminder_time == "18:30"
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert any("Время напоминания о трудозатратах: 18:30" in s.get("text", "") for s in sends)
+
+
+@pytest.mark.asyncio
+async def test_cost_reminder_set_time_invalid(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:costremind:settime")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+    session.calls.clear()
+
+    chat_before = await storage.get_chat(-1001)
+
+    msg2 = make_message("25:99", user_id=11, username="bob", first_name="Bob")
+    await feed(dp, bot, storage, Update(update_id=2, message=msg2))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert any("Неверный формат" in s.get("text", "") for s in sends)
+    chat_after = await storage.get_chat(-1001)
+    assert chat_after.cost_reminder_time == chat_before.cost_reminder_time
+
+
+# ---- T6: planned vacations view tests ----
+
+@pytest.mark.asyncio
+async def test_planned_vacations_view_shows_list(dp, bot, session, storage, monkeypatch):
+    from ppbot.daily_ui import show_planned_vacations
+
+    future_start = "2026-09-10"
+    future_end = "2026-09-15"
+    await seed(storage)
+    await storage.update_member_vacation(-1001, 1, future_end, future_start)
+
+    ref_date = datetime.date(2026, 8, 31)
+    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: ref_date)
+
+    msg = make_message("original").as_(bot)
+    await show_planned_vacations(msg, storage, TZ)
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    text = sends[0]["text"]
+    assert "\U0001f3d6" in text
+    assert "@b" in text
+    assert "с 10.09.2026 по 15.09.2026" in text
+
+
+@pytest.mark.asyncio
+async def test_planned_vacations_view_empty(dp, bot, session, storage, monkeypatch):
+    from ppbot.daily_ui import show_planned_vacations
+
+    await seed(storage)
+
+    ref_date = datetime.date(2026, 8, 31)
+    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: ref_date)
+
+    msg = make_message("original").as_(bot)
+    await show_planned_vacations(msg, storage, TZ)
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    assert "Нет запланированных отпусков" in sends[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_planned_vacations_back_returns_to_picker(dp, bot, session, storage, monkeypatch):
+    from ppbot.daily_ui import show_planned_vacations
+
+    await seed(storage)
+
+    ref_date = datetime.date(2026, 8, 31)
+    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: ref_date)
+
+    msg = make_message("original").as_(bot)
+    await show_planned_vacations(msg, storage, TZ)
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    markup = sends[0]["reply_markup"]
+    flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
+    assert flat == ["daily:vac"]
+
+
+# ---- T7: vacplan button in vacation picker ----
+
+REF_DATE = datetime.date(2026, 8, 31)
+
+
+@pytest.mark.asyncio
+async def test_vacation_picker_shows_plan_button_with_future_vacation(dp, bot, session, storage, monkeypatch):
+    from ppbot import daily_handlers
+
+    monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: REF_DATE)
+    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: REF_DATE)
+
+    await seed(storage)
+    future_start = "2026-09-10"
+    future_end = "2026-09-15"
+    await storage.update_member_vacation(-1001, 1, future_end, future_start)
+
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:vac")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    flat = [btn["callback_data"] for row in edits[0]["reply_markup"]["inline_keyboard"] for btn in row]
+    assert "daily:vacplan" in flat
+
+
+@pytest.mark.asyncio
+async def test_vacation_picker_no_plan_button_without_future(dp, bot, session, storage, monkeypatch):
+    from ppbot import daily_handlers
+
+    monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: REF_DATE)
+    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: REF_DATE)
+
+    await seed(storage)
+
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:vac")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    flat = [btn["callback_data"] for row in edits[0]["reply_markup"]["inline_keyboard"] for btn in row]
+    assert "daily:vacplan" not in flat
+
+
+@pytest.mark.asyncio
+async def test_vacplan_callback_shows_planned_vacations(dp, bot, session, storage, monkeypatch):
+    from ppbot import daily_handlers
+
+    monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: REF_DATE)
+    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: REF_DATE)
+
+    await seed(storage)
+    future_start = "2026-09-10"
+    future_end = "2026-09-15"
+    await storage.update_member_vacation(-1001, 1, future_end, future_start)
+
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:vacplan")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    text = edits[0]["text"]
+    assert "\U0001f3d6" in text
+    assert "@b" in text
+
+
+@pytest.mark.asyncio
+async def test_vacplan_command(dp, bot, session, storage, monkeypatch):
+    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: REF_DATE)
+
+    await seed(storage)
+    msg = make_message("/vacplan")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    assert "Нет запланированных отпусков" in sends[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_vacplan_back_returns_to_picker(dp, bot, session, storage, monkeypatch):
+    from ppbot import daily_handlers
+
+    monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: REF_DATE)
+    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: REF_DATE)
+
+    await seed(storage)
+
+    msg = make_message("original")
+    cb = make_callback(msg, "daily:vacplan")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    markup = edits[0]["reply_markup"]
+    flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
+    assert flat == ["daily:vac"]
