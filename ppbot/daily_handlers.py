@@ -26,6 +26,9 @@ from ppbot.game import GameRegistry
 from ppbot.daily_ui import (
     GREETING_HELP,
     PREFIX_ADD,
+    PREFIX_COSTREMIND,
+    PREFIX_COSTREMIND_SETTIME,
+    PREFIX_COSTREMIND_TOGGLE,
     PREFIX_HELP,
     PREFIX_LEAD,
     PREFIX_LEADER,
@@ -37,12 +40,15 @@ from ppbot.daily_ui import (
     PREFIX_TEAM,
     PREFIX_TIME,
     PREFIX_VAC,
+    PREFIX_VACPLAN,
     PREFIX_VACATION,
     PREFIX_WHO,
     _ensure_today_schedule,
     _schedule_leader,
+    build_cost_remind_settings_markup,
     build_member_picker_markup,
     show_menu,
+    show_planned_vacations,
     show_remove_list,
     show_team,
     who_reply,
@@ -60,6 +66,10 @@ class SetTime(StatesGroup):
 
 
 class SetVacation(StatesGroup):
+    waiting = State()
+
+
+class SetCostReminderTime(StatesGroup):
     waiting = State()
 
 
@@ -381,15 +391,20 @@ def create_router() -> Router:
     # ---- vacation ----
 
     @r.callback_query(F.data == PREFIX_VACATION)
-    async def vacation_picker_callback(callback: CallbackQuery, daily: DailyRegistry):
+    async def vacation_picker_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
         members = await daily.get_members(callback.message.chat.id)
         if not members:
             await callback.message.answer("Команда пуста. Добавьте участников через /team")
             await callback.answer()
             return
+        today_s = str(today_in_tz(tz))
+        has_future = any(
+            m.vacation_start is not None and m.vacation_start > today_s
+            for m in members
+        )
         await callback.message.edit_text(
             "Кто уходит в отпуск?",
-            reply_markup=build_member_picker_markup(members, PREFIX_VAC),
+            reply_markup=build_member_picker_markup(members, PREFIX_VAC, vacplan_button=has_future),
         )
         await callback.answer()
 
@@ -399,6 +414,11 @@ def create_router() -> Router:
         await state.set_state(SetVacation.waiting)
         await state.update_data(vacation_position=position)
         await callback.message.answer("До какой даты отпуск? (ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ, «снять» — убрать)")
+        await callback.answer()
+
+    @r.callback_query(F.data == PREFIX_VACPLAN)
+    async def vacplan_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
+        await show_planned_vacations(callback.message, daily, tz, edit=True)
         await callback.answer()
 
     @r.message(Command("vacation"))
@@ -457,6 +477,10 @@ def create_router() -> Router:
         await state.update_data(vacation_position=member.position)
         await message.answer("До какой даты отпуск? (ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ, «снять» — убрать)")
 
+    @r.message(Command("vacplan"))
+    async def vacplan_command(message: Message, daily: DailyRegistry, tz):
+        await show_planned_vacations(message, daily, tz, edit=False)
+
     @r.message(SetVacation.waiting)
     async def vacation_input(message: Message, state: FSMContext, daily: DailyRegistry, tz, workdays=None):
         wd = workdays.is_workday if workdays is not None else None
@@ -495,5 +519,52 @@ def create_router() -> Router:
                 )
             )
         await state.clear()
+
+    # ---- cost-reminder settings ----
+
+    @r.callback_query(F.data == PREFIX_COSTREMIND)
+    async def cost_remind_callback(callback: CallbackQuery, daily: DailyRegistry):
+        chat = await daily.get_chat(callback.message.chat.id)
+        if chat is None:
+            chat = DailyChat(chat_id=callback.message.chat.id)
+            await daily.upsert_chat(chat)
+        await callback.message.edit_text(
+            "Напоминания о трудозатратах",
+            reply_markup=build_cost_remind_settings_markup(chat.cost_reminder_enabled, chat.cost_reminder_time),
+        )
+        await callback.answer()
+
+    @r.callback_query(F.data == PREFIX_COSTREMIND_TOGGLE)
+    async def cost_remind_toggle_callback(callback: CallbackQuery, daily: DailyRegistry):
+        chat = await daily.get_chat(callback.message.chat.id)
+        if chat is None:
+            chat = DailyChat(chat_id=callback.message.chat.id)
+        chat.cost_reminder_enabled = not chat.cost_reminder_enabled
+        await daily.upsert_chat(chat)
+        await callback.message.edit_text(
+            "Напоминания о трудозатратах",
+            reply_markup=build_cost_remind_settings_markup(chat.cost_reminder_enabled, chat.cost_reminder_time),
+        )
+        await callback.answer()
+
+    @r.callback_query(F.data == PREFIX_COSTREMIND_SETTIME)
+    async def cost_remind_settime_callback(callback: CallbackQuery, state: FSMContext):
+        await state.set_state(SetCostReminderTime.waiting)
+        await callback.message.answer("Пришлите время напоминания в формате ЧЧ:ММ")
+        await callback.answer()
+
+    @r.message(SetCostReminderTime.waiting)
+    async def cost_remind_time_input(message: Message, state: FSMContext, daily: DailyRegistry):
+        text = (message.text or "").strip()
+        if not TIME_RE.match(text):
+            await message.answer("Неверный формат. Пришлите время в формате ЧЧ:ММ")
+            return
+        chat = await daily.get_chat(message.chat.id)
+        if chat is None:
+            chat = DailyChat(chat_id=message.chat.id)
+        chat.cost_reminder_time = text
+        await daily.upsert_chat(chat)
+        await state.clear()
+        await message.answer("Время напоминания о трудозатратах: {}".format(text))
 
     return r
