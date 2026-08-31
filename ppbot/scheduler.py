@@ -70,6 +70,62 @@ def should_send_start(chat: DailyChat, now: datetime.datetime, today: datetime.d
     return daily_dt <= now < daily_dt + datetime.timedelta(minutes=START_GRACE_MINUTES)
 
 
+async def last_workday_of_week(today: datetime.date, workday_client) -> datetime.date:
+    """Return the last workday in the Mon-Sun week containing *today*.
+
+    Scans from Monday through Sunday of the current week. The last day
+    where ``is_workday`` is True is returned. If *today* is itself the
+    last workday of its week, *today* is returned.
+    """
+    start_of_week = today - datetime.timedelta(days=today.weekday())
+    end_of_week = start_of_week + datetime.timedelta(days=6)
+    latest: datetime.date | None = None
+    day = start_of_week
+    while day <= end_of_week:
+        if await workday_client.is_workday(day):
+            latest = day
+        day += datetime.timedelta(days=1)
+    return latest  # type: ignore[return-value]
+
+
+async def last_workday_of_month(today: datetime.date, workday_client) -> datetime.date:
+    """Return the last workday in the calendar month of *today*.
+
+    Scans backward from the last calendar day of the month. The first day
+    where ``is_workday`` is True is returned.
+    """
+    if today.month == 12:
+        last_day = datetime.date(today.year + 1, 1, 1) - datetime.timedelta(days=1)
+    else:
+        last_day = datetime.date(today.year, today.month + 1, 1) - datetime.timedelta(days=1)
+    day = last_day
+    while day >= today:
+        if await workday_client.is_workday(day):
+            return day
+        day -= datetime.timedelta(days=1)
+    return today
+
+
+async def should_send_cost_reminder_weekly(chat: DailyChat, today: datetime.date, workday_client) -> bool:
+    """True when the weekly cost-closing reminder is due today."""
+    if not chat.cost_reminder_enabled:
+        return False
+    last_wd = await last_workday_of_week(today, workday_client)
+    if today != last_wd:
+        return False
+    return chat.cost_reminder_last_week_date != str(today)
+
+
+async def should_send_cost_reminder_monthly(chat: DailyChat, today: datetime.date, workday_client) -> bool:
+    """True when the monthly cost-closing reminder is due today."""
+    if not chat.cost_reminder_enabled:
+        return False
+    last_wd = await last_workday_of_month(today, workday_client)
+    if today != last_wd:
+        return False
+    return chat.cost_reminder_last_month_date != str(today)
+
+
 async def _process_chat(
     bot: Bot,
     storage: DailyRegistry,
@@ -117,6 +173,26 @@ async def _process_chat(
             logger.warning("chat %s unavailable: %s", chat.chat_id, exc)
         chat.last_start_date = today_s
         await storage.upsert_chat(chat)
+
+    if is_workday:
+        remind_dt = datetime.datetime.combine(today, parse_time(chat.cost_reminder_time))
+        in_window = remind_dt <= now < remind_dt + datetime.timedelta(minutes=START_GRACE_MINUTES)
+
+        if in_window and await should_send_cost_reminder_weekly(chat, today, workday_client):
+            try:
+                await bot.send_message(chat_id=chat.chat_id, text="Не забудьте списать трудозатраты!")
+            except TelegramBadRequest as exc:
+                logger.warning("chat %s unavailable: %s", chat.chat_id, exc)
+            chat.cost_reminder_last_week_date = today_s
+            await storage.upsert_chat(chat)
+
+        if in_window and await should_send_cost_reminder_monthly(chat, today, workday_client):
+            try:
+                await bot.send_message(chat_id=chat.chat_id, text="Не забудьте списать трудозатраты за месяц!")
+            except TelegramBadRequest as exc:
+                logger.warning("chat %s unavailable: %s", chat.chat_id, exc)
+            chat.cost_reminder_last_month_date = today_s
+            await storage.upsert_chat(chat)
 
 
 async def reminder_loop(
