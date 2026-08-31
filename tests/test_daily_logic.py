@@ -4,6 +4,7 @@ import datetime
 import pytest
 
 from ppbot.daily import (
+    DailyChat,
     DailyMember,
     advance_next,
     apply_skip,
@@ -676,3 +677,129 @@ def test_strip_at_handle_no_match():
     """_strip_at_handle returns text unchanged when no @handle to strip."""
     m = member(0, "Иван")
     assert m._strip_at_handle("Иван") == "Иван"
+
+
+# ---- DailyChat cost-reminder fields ----
+
+def test_daily_chat_to_dict_includes_cost_reminder_keys():
+    chat = DailyChat(
+        chat_id=1,
+        cost_reminder_enabled=True,
+        cost_reminder_time="18:30",
+        cost_reminder_last_week_date="2026-08-07",
+        cost_reminder_last_month_date="2026-08-28",
+    )
+    d = chat.to_dict()
+    assert d["cost_reminder_enabled"] is True
+    assert d["cost_reminder_time"] == "18:30"
+    assert d["cost_reminder_last_week_date"] == "2026-08-07"
+    assert d["cost_reminder_last_month_date"] == "2026-08-28"
+
+
+def test_daily_chat_from_dict_roundtrip_cost_reminder():
+    chat = DailyChat(
+        chat_id=1,
+        cost_reminder_enabled=True,
+        cost_reminder_time="18:30",
+        cost_reminder_last_week_date="2026-08-07",
+        cost_reminder_last_month_date="2026-08-28",
+    )
+    restored = DailyChat.from_dict(chat.to_dict())
+    assert restored.cost_reminder_enabled is True
+    assert restored.cost_reminder_time == "18:30"
+    assert restored.cost_reminder_last_week_date == "2026-08-07"
+    assert restored.cost_reminder_last_month_date == "2026-08-28"
+
+
+def test_daily_chat_from_dict_defaults_on_old_dict():
+    old_dict = {
+        "chat_id": 1,
+        "daily_time": "10:00",
+        "next_index": 0,
+        "last_reminder_date": None,
+        "last_start_date": None,
+        "last_catchup_date": None,
+        "last_advance_date": None,
+    }
+    chat = DailyChat.from_dict(old_dict)
+    assert chat.cost_reminder_enabled is False
+    assert chat.cost_reminder_time == "17:00"
+    assert chat.cost_reminder_last_week_date is None
+    assert chat.cost_reminder_last_month_date is None
+
+
+def test_daily_chat_to_dict_roundtrip_preserves_all_fields():
+    chat = DailyChat(
+        chat_id=42,
+        daily_time="09:30",
+        next_index=3,
+        last_reminder_date="2026-08-10",
+        last_start_date="2026-08-11",
+        last_catchup_date="2026-08-12",
+        last_advance_date="2026-08-13",
+        cost_reminder_enabled=True,
+        cost_reminder_time="18:30",
+        cost_reminder_last_week_date="2026-08-07",
+        cost_reminder_last_month_date="2026-08-28",
+    )
+    restored = DailyChat.from_dict(chat.to_dict())
+    assert restored.chat_id == 42
+    assert restored.daily_time == "09:30"
+    assert restored.next_index == 3
+    assert restored.last_reminder_date == "2026-08-10"
+    assert restored.last_start_date == "2026-08-11"
+    assert restored.last_catchup_date == "2026-08-12"
+    assert restored.last_advance_date == "2026-08-13"
+    assert restored.cost_reminder_enabled is True
+    assert restored.cost_reminder_time == "18:30"
+    assert restored.cost_reminder_last_week_date == "2026-08-07"
+    assert restored.cost_reminder_last_month_date == "2026-08-28"
+
+
+# ---- T6: planned vacations (markup & filter logic) ----
+
+def test_is_planned_future_vacation_filters_correctly():
+    """A member qualifies as 'future vacation' only when vacation_start is
+    set AND strictly after today.  Legacy single-date (vacation_start=None)
+    or past start do NOT qualify."""
+    today = "2026-08-15"
+    future = member(0, "Future", vacation_start="2026-08-20", vacation_until="2026-08-25")
+    past = member(1, "Past", vacation_start="2026-08-10", vacation_until="2026-08-12")
+    legacy = member(2, "Legacy", vacation_start=None, vacation_until="2026-08-20")
+    none = member(3, "None")
+
+    def _is_future(m, ref):
+        return m.vacation_start is not None and m.vacation_start > ref
+
+    assert _is_future(future, today) is True
+    assert _is_future(past, today) is False
+    assert _is_future(legacy, today) is False
+    assert _is_future(none, today) is False
+
+
+def test_build_member_picker_markup_vacplan_button():
+    from ppbot.daily_ui import PREFIX_VAC, PREFIX_VACPLAN, build_member_picker_markup
+
+    members = [member(0, "A")]
+    # vacplan_button=True: button present BEFORE the back button
+    markup = build_member_picker_markup(members, PREFIX_VAC, vacplan_button=True)
+    flat = [(btn.text, btn.callback_data) for row in markup.inline_keyboard for btn in row]
+    texts = [t for t, _ in flat]
+    assert "Планируемые отпуска" in texts
+    vacplan_idx = texts.index("Планируемые отпуска")
+    back_idx = texts.index("🔙 Назад")
+    assert vacplan_idx < back_idx
+    assert flat[vacplan_idx] == ("Планируемые отпуска", PREFIX_VACPLAN)
+
+    # vacplan_button=False (default): no plan button
+    markup2 = build_member_picker_markup(members, PREFIX_VAC)
+    flat2 = [btn.callback_data for row in markup2.inline_keyboard for btn in row]
+    assert PREFIX_VACPLAN not in flat2
+
+
+def test_build_member_picker_markup_vacplan_empty_members():
+    from ppbot.daily_ui import PREFIX_VAC, PREFIX_VACPLAN, build_member_picker_markup
+
+    markup = build_member_picker_markup([], PREFIX_VAC, vacplan_button=True)
+    flat = [(btn.text, btn.callback_data) for row in markup.inline_keyboard for btn in row]
+    assert flat == [("Планируемые отпуска", PREFIX_VACPLAN), ("🔙 Назад", "daily:menu")]
