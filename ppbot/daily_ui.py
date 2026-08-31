@@ -31,6 +31,10 @@ PREFIX_LEADER = "daily:lead"
 PREFIX_LEAD = "daily:lead:"
 PREFIX_VACATION = "daily:vac"
 PREFIX_VAC = "daily:vac:"
+PREFIX_VACPLAN = "daily:vacplan"
+PREFIX_COSTREMIND = "daily:costremind"
+PREFIX_COSTREMIND_SETTIME = "daily:costremind:settime"
+PREFIX_COSTREMIND_TOGGLE = "daily:costremind:toggle"
 
 
 def build_reminder_markup(leader: DailyMember, show_menu: bool = False) -> InlineKeyboardMarkup:
@@ -71,15 +75,34 @@ def build_menu_markup() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Выбрать ведущего", callback_data=PREFIX_LEADER),
                 InlineKeyboardButton(text="Отпуск", callback_data=PREFIX_VACATION),
             ],
+            [
+                InlineKeyboardButton(text="Напомн. о трудозатратах", callback_data=PREFIX_COSTREMIND),
+            ],
         ]
     )
 
 
-def build_member_picker_markup(members: List[DailyMember], prefix: str) -> InlineKeyboardMarkup:
+def build_cost_remind_settings_markup(enabled: bool, time: str) -> InlineKeyboardMarkup:
+    """Cost-reminder settings view: on/off toggle, time, and back to menu."""
+    toggle_text = "Выключить" if enabled else "Включить"
+    rows = [
+        [InlineKeyboardButton(text=toggle_text, callback_data=PREFIX_COSTREMIND_TOGGLE)],
+        [InlineKeyboardButton(text="Время: {}".format(time), callback_data=PREFIX_COSTREMIND_SETTIME)],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_MENU)],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_member_picker_markup(
+    members: List[DailyMember], prefix: str, *, vacplan_button: bool = False,
+) -> InlineKeyboardMarkup:
     """One button per member carrying its position, plus a back button.
 
     `prefix` is the callback prefix (e.g. PREFIX_LEAD or PREFIX_VAC); the
     payload carries the member POSITION (stable even for user_id=None members).
+
+    When *vacplan_button* is True, a "Планируемые отпуска" row is inserted
+    before the back button (only meaningful for the vacation picker).
     """
     rows = [
         [
@@ -90,6 +113,8 @@ def build_member_picker_markup(members: List[DailyMember], prefix: str) -> Inlin
         ]
         for m in members
     ]
+    if vacplan_button:
+        rows.append([InlineKeyboardButton(text="Планируемые отпуска", callback_data=PREFIX_VACPLAN)])
     rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_MENU)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -199,6 +224,33 @@ async def show_remove_list(message: Message, daily: DailyRegistry, tz, edit: boo
     else:
         text = "Удаление участников:\n" + member_list_text(members, str(today_in_tz(tz)))
     markup = build_remove_markup(members)
+    if edit:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
+
+
+async def show_planned_vacations(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
+    chat_id = message.chat.id
+    members = await daily.get_members(chat_id)
+    today_s = str(today_in_tz(tz))
+    future = sorted(
+        [m for m in members if m.vacation_start is not None and m.vacation_start > today_s],
+        key=lambda m: m.vacation_start,
+    )
+    if future:
+        lines = [
+            "\U0001f3d6 {}: с {} по {}".format(
+                m.get_display_name(), format_ru_date(m.vacation_start), format_ru_date(m.vacation_until),
+            )
+            for m in future
+        ]
+        text = "\n".join(lines)
+    else:
+        text = "Нет запланированных отпусков"
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_VACATION)]]
+    )
     if edit:
         await message.edit_text(text, reply_markup=markup)
     else:
