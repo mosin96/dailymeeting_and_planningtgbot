@@ -127,6 +127,10 @@ class DailyChat:
     last_start_date: Optional[str] = None
     last_catchup_date: Optional[str] = None
     last_advance_date: Optional[str] = None
+    cost_reminder_enabled: bool = False
+    cost_reminder_time: str = "17:00"
+    cost_reminder_last_week_date: Optional[str] = None
+    cost_reminder_last_month_date: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -137,6 +141,10 @@ class DailyChat:
             "last_start_date": self.last_start_date,
             "last_catchup_date": self.last_catchup_date,
             "last_advance_date": self.last_advance_date,
+            "cost_reminder_enabled": self.cost_reminder_enabled,
+            "cost_reminder_time": self.cost_reminder_time,
+            "cost_reminder_last_week_date": self.cost_reminder_last_week_date,
+            "cost_reminder_last_month_date": self.cost_reminder_last_month_date,
         }
 
     @classmethod
@@ -149,6 +157,10 @@ class DailyChat:
             last_start_date=dct.get("last_start_date"),
             last_catchup_date=dct.get("last_catchup_date"),
             last_advance_date=dct.get("last_advance_date"),
+            cost_reminder_enabled=dct.get("cost_reminder_enabled", False),
+            cost_reminder_time=dct.get("cost_reminder_time", "17:00"),
+            cost_reminder_last_week_date=dct.get("cost_reminder_last_week_date"),
+            cost_reminder_last_month_date=dct.get("cost_reminder_last_month_date"),
         )
 
 

@@ -64,6 +64,14 @@ class DailyRegistry:
             await self._db.execute("ALTER TABLE daily_chats ADD COLUMN last_catchup_date TEXT")
         if "last_advance_date" not in cols:
             await self._db.execute("ALTER TABLE daily_chats ADD COLUMN last_advance_date TEXT")
+        if "cost_reminder_enabled" not in cols:
+            await self._db.execute("ALTER TABLE daily_chats ADD COLUMN cost_reminder_enabled INTEGER DEFAULT 0")
+        if "cost_reminder_time" not in cols:
+            await self._db.execute("ALTER TABLE daily_chats ADD COLUMN cost_reminder_time TEXT DEFAULT '17:00'")
+        if "cost_reminder_last_week_date" not in cols:
+            await self._db.execute("ALTER TABLE daily_chats ADD COLUMN cost_reminder_last_week_date TEXT")
+        if "cost_reminder_last_month_date" not in cols:
+            await self._db.execute("ALTER TABLE daily_chats ADD COLUMN cost_reminder_last_month_date TEXT")
         # migrate older DBs: add the vacation column if missing
         async with self._db.execute("PRAGMA table_info(daily_members)") as cursor:
             mcols = [row[1] for row in await cursor.fetchall()]
@@ -94,7 +102,9 @@ class DailyRegistry:
     async def get_chat(self, chat_id: int) -> Optional[DailyChat]:
         query = (
             "SELECT chat_id, daily_time, next_index, last_reminder_date, "
-            "last_start_date, last_catchup_date, last_advance_date "
+            "last_start_date, last_catchup_date, last_advance_date, "
+            "cost_reminder_enabled, cost_reminder_time, "
+            "cost_reminder_last_week_date, cost_reminder_last_month_date "
             "FROM daily_chats WHERE chat_id = ?"
         )
         async with self._db.execute(query, (chat_id,)) as cursor:
@@ -109,6 +119,10 @@ class DailyRegistry:
                 last_start_date=row[4],
                 last_catchup_date=row[5],
                 last_advance_date=row[6],
+                cost_reminder_enabled=bool(row[7]),
+                cost_reminder_time=row[8],
+                cost_reminder_last_week_date=row[9],
+                cost_reminder_last_month_date=row[10],
             )
 
     async def upsert_chat(self, chat: DailyChat):
@@ -116,15 +130,21 @@ class DailyRegistry:
             """
             INSERT INTO daily_chats
                 (chat_id, daily_time, next_index, last_reminder_date,
-                 last_start_date, last_catchup_date, last_advance_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 last_start_date, last_catchup_date, last_advance_date,
+                 cost_reminder_enabled, cost_reminder_time,
+                 cost_reminder_last_week_date, cost_reminder_last_month_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 daily_time = excluded.daily_time,
                 next_index = excluded.next_index,
                 last_reminder_date = excluded.last_reminder_date,
                 last_start_date = excluded.last_start_date,
                 last_catchup_date = excluded.last_catchup_date,
-                last_advance_date = excluded.last_advance_date
+                last_advance_date = excluded.last_advance_date,
+                cost_reminder_enabled = excluded.cost_reminder_enabled,
+                cost_reminder_time = excluded.cost_reminder_time,
+                cost_reminder_last_week_date = excluded.cost_reminder_last_week_date,
+                cost_reminder_last_month_date = excluded.cost_reminder_last_month_date
             """,
             (
                 chat.chat_id,
@@ -134,6 +154,10 @@ class DailyRegistry:
                 chat.last_start_date,
                 chat.last_catchup_date,
                 chat.last_advance_date,
+                int(chat.cost_reminder_enabled),
+                chat.cost_reminder_time,
+                chat.cost_reminder_last_week_date,
+                chat.cost_reminder_last_month_date,
             ),
         )
         await self._db.commit()
@@ -141,7 +165,9 @@ class DailyRegistry:
     async def list_chats(self) -> List[DailyChat]:
         query = (
             "SELECT chat_id, daily_time, next_index, last_reminder_date, "
-            "last_start_date, last_catchup_date, last_advance_date "
+            "last_start_date, last_catchup_date, last_advance_date, "
+            "cost_reminder_enabled, cost_reminder_time, "
+            "cost_reminder_last_week_date, cost_reminder_last_month_date "
             "FROM daily_chats"
         )
         async with self._db.execute(query) as cursor:
@@ -155,6 +181,10 @@ class DailyRegistry:
                 last_start_date=r[4],
                 last_catchup_date=r[5],
                 last_advance_date=r[6],
+                cost_reminder_enabled=bool(r[7]),
+                cost_reminder_time=r[8],
+                cost_reminder_last_week_date=r[9],
+                cost_reminder_last_month_date=r[10],
             )
             for r in rows
         ]
