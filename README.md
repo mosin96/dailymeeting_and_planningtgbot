@@ -95,7 +95,63 @@ export PP_WEBAPP_PUBLIC_URL=https://BOT-DOMAIN.example.com:8443
 ./run.sh
 ```
 
-Certificates are renewed by certbot (add a `--renew` hook or a cron that copies the renewed files into `~/.ppbot/certs` and restarts the container). If no certificates are provided, the mini-app server starts in plain HTTP mode on port 8443 — fine for local debugging inside Telegram via [test tools](https://github.com/TelegramMessenger/Telegram-iOS/blob/main/submodules/TelegramUIPreferences/README.md), not for production.
+Certificates are renewed by certbot. Because the bot loads the TLS certificate once at startup, a renewed certificate must be copied into `~/.ppbot/certs` **and** the container restarted — see [Automatic certificate renewal](#automatic-certificate-renewal-cron) below. If no certificates are provided, the mini-app server starts in plain HTTP mode on port 8443 — fine for local debugging inside Telegram via [test tools](https://github.com/TelegramMessenger/Telegram-iOS/blob/main/submodules/TelegramUIPreferences/README.md), not for production.
+
+#### Automatic certificate renewal (cron)
+
+Let's Encrypt certificates live 90 days; certbot must run at least twice a day. A **deploy hook** copies the renewed files into the mounted `~/.ppbot/certs` and restarts the container (the hook runs only when the certificate was actually renewed, so there is no daily downtime):
+
+```bash
+sudo tee /usr/local/bin/ppbot-cert-deploy.sh >/dev/null <<'SH'
+#!/bin/bash
+set -euo pipefail
+
+BOT_USER="YOUR_LINUX_USER"                      # owner of ~/.ppbot
+CERT_DIR="/home/${BOT_USER}/.ppbot/certs"       # mounted into the container as /certs
+CONTAINER="ppbot"
+
+install -d -m 755 "${CERT_DIR}"
+install -m 644 "${RENEWED_LINEAGE}/fullchain.pem" "${CERT_DIR}/fullchain.pem"
+install -m 600 "${RENEWED_LINEAGE}/privkey.pem"   "${CERT_DIR}/privkey.pem"
+chown "${BOT_USER}:${BOT_USER}" "${CERT_DIR}"/*
+
+# The mini-app reads the certificate only at startup.
+/usr/bin/docker restart "${CONTAINER}"
+SH
+sudo chmod 755 /usr/local/bin/ppbot-cert-deploy.sh
+```
+
+Then pick **one** of the two options:
+
+**Option A — certbot's own timer/cron already exists** (usual for distro packages). Check with `systemctl list-timers --all | grep certbot` or `cat /etc/cron.d/certbot`. If it exists, no cron entry is needed: just drop the hook where certbot finds it automatically:
+
+```bash
+sudo cp /usr/local/bin/ppbot-cert-deploy.sh /etc/letsencrypt/renewal-hooks/deploy/ppbot-cert-deploy.sh
+```
+
+**Option B — no timer installed.** Add a root crontab entry (`sudo crontab -e`):
+
+```cron
+# m  h      dom mon dow  command
+17 3,15 * * * /usr/bin/certbot renew --quiet --deploy-hook /usr/local/bin/ppbot-cert-deploy.sh >> /var/log/ppbot-cert.log 2>&1
+```
+
+Notes:
+
+- Use absolute paths in cron (`PATH` is minimal there), and keep `/usr/bin/docker` as installed on your host.
+- With the `--standalone` method port 80 must be free during renewal. If something else listens on 80, issue with `--webroot`/the nginx plugin or use a DNS challenge instead.
+- Test the hook without waiting for a renewal (restarts the container once):
+  ```bash
+  sudo RENEWED_LINEAGE=/etc/letsencrypt/live/BOT-DOMAIN.example.com \
+       /usr/local/bin/ppbot-cert-deploy.sh
+  ```
+- Validate issuance (does not save/install anything): `sudo certbot renew --dry-run`.
+- Check the certificate the bot actually serves after a restart:
+  ```bash
+  echo | openssl s_client -connect BOT-DOMAIN.example.com:8443 -servername BOT-DOMAIN.example.com 2>/dev/null \
+    | openssl x509 -noout -subject -dates
+  ```
+- Renewal logs: `/var/log/letsencrypt/letsencrypt.log` (certbot) and `/var/log/ppbot-cert.log` (cron redirect).
 
 ##### Register the Mini App in @BotFather (required!)
 
