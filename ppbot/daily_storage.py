@@ -333,6 +333,62 @@ class DailyRegistry:
         )
         await self._db.commit()
 
+    async def move_member(self, chat_id: int, position: int, direction: int) -> bool:
+        """Swap a member with the adjacent one (direction -1 up, +1 down).
+
+        Positions define the rotation order, so this swaps the two rows and
+        moves their vacations with them. `daily_chats.next_index` is remapped
+        so it keeps pointing at the same person (today's leader does not change
+        because of a reorder). Returns False on boundary/unknown positions.
+        """
+        target = position + direction
+        if direction not in (-1, 1) or target < 0:
+            return False
+        async with self._db.execute("BEGIN"):
+            async with self._db.execute(
+                "SELECT position FROM daily_members WHERE chat_id = ? AND position IN (?, ?)",
+                (chat_id, position, target),
+            ) as cursor:
+                found = {row[0] for row in await cursor.fetchall()}
+            if found != {position, target}:
+                await self._db.commit()
+                return False
+            # swap through a temporary position because position is the PK
+            await self._db.execute(
+                "UPDATE daily_members SET position = -1 WHERE chat_id = ? AND position = ?",
+                (chat_id, position),
+            )
+            await self._db.execute(
+                "UPDATE daily_members SET position = ? WHERE chat_id = ? AND position = ?",
+                (position, chat_id, target),
+            )
+            await self._db.execute(
+                "UPDATE daily_members SET position = ? WHERE chat_id = ? AND position = -1",
+                (target, chat_id),
+            )
+            # vacations follow their member
+            await self._db.execute(
+                "UPDATE daily_vacations SET position = -1 WHERE chat_id = ? AND position = ?",
+                (chat_id, position),
+            )
+            await self._db.execute(
+                "UPDATE daily_vacations SET position = ? WHERE chat_id = ? AND position = ?",
+                (position, chat_id, target),
+            )
+            await self._db.execute(
+                "UPDATE daily_vacations SET position = ? WHERE chat_id = ? AND position = -1",
+                (target, chat_id),
+            )
+            chat = await self.get_chat(chat_id)
+            if chat is not None:
+                if chat.next_index == position:
+                    chat.next_index = target
+                elif chat.next_index == target:
+                    chat.next_index = position
+                await self.upsert_chat(chat)
+        await self._db.commit()
+        return True
+
     async def bind_member_user_id(self, chat_id: int, position: int, user_id: int) -> bool:
         """Attach a Telegram id to a member added manually by @username.
 

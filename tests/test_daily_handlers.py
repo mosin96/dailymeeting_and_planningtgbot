@@ -662,6 +662,101 @@ async def test_team_remove_reindexes(dp, bot, session, storage):
     assert chat.next_index == 1  # 2 > 1 -> decremented
 
 
+@pytest.mark.asyncio
+async def test_team_view_has_reorder_button(dp, bot, session, storage):
+    await seed(storage)
+    msg = make_message("/team")
+    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    flat = [
+        btn["callback_data"]
+        for row in sends[0]["reply_markup"]["inline_keyboard"]
+        for btn in row
+    ]
+    assert "daily:reorder" in flat
+
+
+@pytest.mark.asyncio
+async def test_reorder_view_shows_arrows(dp, bot, session, storage):
+    await seed(storage)
+    cb = make_callback(make_message("original"), "daily:reorder")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert edits[0]["text"].startswith("Порядок ротации")
+    flat = [
+        btn["callback_data"]
+        for row in edits[0]["reply_markup"]["inline_keyboard"]
+        for btn in row
+    ]
+    assert "daily:move:0:down" in flat
+    assert "daily:move:1:up" in flat
+    assert "daily:move:2:up" in flat
+    assert "daily:noop" in flat
+    assert "daily:team" in flat  # back to the team view
+
+
+@pytest.mark.asyncio
+async def test_move_down_changes_rotation_order(dp, bot, session, storage):
+    await seed(storage, next_index=0)
+    cb = make_callback(make_message("original"), "daily:move:0:down")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    members = await storage.get_members(-1001)
+    assert [m.username for m in members] == ["@b", "@a", "@c"]
+    assert [m.position for m in members] == [0, 1, 2]
+
+    answers = [p for m, p in session.calls if m == "answerCallbackQuery"]
+    assert any((a.get("text") or "") == "Порядок обновлён" for a in answers)
+
+    # the schedule window was rebuilt and today's leader is still @a (moved 0 -> 1)
+    chat = await storage.get_chat(-1001)
+    assert chat.next_index == 1
+    schedule = await storage.get_schedule(-1001)
+    assert schedule
+    today = datetime.date.today()
+    if today.weekday() < 5:
+        assert schedule.get(today.isoformat()) == 1
+
+
+@pytest.mark.asyncio
+async def test_move_up_at_top_reports_boundary(dp, bot, session, storage):
+    await seed(storage, next_index=0)
+    cb = make_callback(make_message("original"), "daily:move:0:up")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    members = await storage.get_members(-1001)
+    assert [m.username for m in members] == ["@a", "@b", "@c"]
+    answers = [p for m, p in session.calls if m == "answerCallbackQuery"]
+    assert any((a.get("text") or "") == "Уже в начале" for a in answers)
+
+
+@pytest.mark.asyncio
+async def test_move_down_at_bottom_reports_boundary(dp, bot, session, storage):
+    await seed(storage, next_index=0)
+    cb = make_callback(make_message("original"), "daily:move:2:down")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    members = await storage.get_members(-1001)
+    assert [m.username for m in members] == ["@a", "@b", "@c"]
+    answers = [p for m, p in session.calls if m == "answerCallbackQuery"]
+    assert any((a.get("text") or "") == "Уже в конце" for a in answers)
+
+
+@pytest.mark.asyncio
+async def test_reorder_view_empty_team(dp, bot, session, storage):
+    await storage.upsert_chat(DailyChat(chat_id=-1001))
+    cb = make_callback(make_message("original"), "daily:reorder")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    edits = [p for m, p in session.calls if m == "editMessageText"]
+    assert len(edits) == 1
+    assert "Команда пуста" in edits[0]["text"]
+
+
 # ---- T5: menu buttons and member picker ----
 
 @pytest.mark.asyncio

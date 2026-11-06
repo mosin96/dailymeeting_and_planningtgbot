@@ -36,6 +36,9 @@ from ppbot.daily_ui import (
     PREFIX_MENU,
     PREFIX_REMOVE,
     PREFIX_REMOVE_LIST,
+    PREFIX_REORDER,
+    PREFIX_MOVE,
+    PREFIX_NOOP,
     PREFIX_SKIP,
     PREFIX_SUB,
     PREFIX_TEAM,
@@ -49,6 +52,7 @@ from ppbot.daily_ui import (
     show_menu,
     show_planned_vacations,
     show_remove_list,
+    show_reorder,
     show_team,
     who_reply,
 )
@@ -124,6 +128,35 @@ def create_router() -> Router:
     async def remove_list_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
         await show_remove_list(callback.message, daily, tz, edit=True)
         await callback.answer()
+
+    # ---- reorder the rotation ----
+
+    @r.callback_query(F.data == PREFIX_REORDER)
+    async def reorder_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
+        await show_reorder(callback.message, daily, tz, edit=True)
+        await callback.answer()
+
+    @r.callback_query(F.data == PREFIX_NOOP)
+    async def reorder_noop_callback(callback: CallbackQuery):
+        await callback.answer()
+
+    @r.callback_query(F.data.regexp(r"^{}(\d+):(up|down)$".format(PREFIX_MOVE)))
+    async def move_member_callback(callback: CallbackQuery, daily: DailyRegistry, tz, workdays=None):
+        payload = callback.data[len(PREFIX_MOVE):]
+        pos_s, direction = payload.rsplit(":", 1)
+        moved = await daily.move_member(
+            callback.message.chat.id, int(pos_s), -1 if direction == "up" else 1
+        )
+        if moved:
+            wd = workdays.is_workday if workdays is not None else None
+            await _refresh_schedule(daily, callback.message.chat.id, tz, workdays=wd)
+        if moved:
+            await callback.answer("Порядок обновлён")
+        elif direction == "up":
+            await callback.answer("Уже в начале")
+        else:
+            await callback.answer("Уже в конце")
+        await show_reorder(callback.message, daily, tz, edit=True)
 
     @r.callback_query(F.data.regexp(r"^{}(.+)$".format(PREFIX_REMOVE)))
     async def remove_member_callback(callback: CallbackQuery, daily: DailyRegistry, tz, workdays=None):

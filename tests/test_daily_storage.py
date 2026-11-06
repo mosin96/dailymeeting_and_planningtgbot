@@ -134,6 +134,63 @@ def _vac(m, i):
     return m.vacations[i]
 
 
+class TestReorder:
+    async def test_move_down_swaps_positions_and_vacations(self, registry):
+        await seed(registry)
+        await registry.upsert_chat(DailyChat(chat_id=1, next_index=0))
+        await registry.add_vacation(1, 0, "2026-08-01", "2026-08-05")
+        assert await registry.move_member(1, 0, 1) is True
+
+        members = await registry.get_members(1)
+        assert [m.username for m in members] == ["@u1", "@u0", "@u2"]
+        # the vacation stays attached to @u0 (now position 1)
+        assert [v.start for v in members[1].vacations] == ["2026-08-01"]
+        assert members[0].vacations == []
+        # next_index followed @u0 from position 0 to 1
+        chat = await registry.get_chat(1)
+        assert chat.next_index == 1
+
+    async def test_move_up_swaps_and_remaps_next_index(self, registry):
+        await seed(registry)
+        await registry.upsert_chat(DailyChat(chat_id=1, next_index=2))
+        assert await registry.move_member(1, 2, -1) is True
+
+        members = await registry.get_members(1)
+        assert [m.username for m in members] == ["@u0", "@u2", "@u1"]
+        chat = await registry.get_chat(1)
+        assert chat.next_index == 1  # @u2 moved from 2 to 1
+
+    async def test_move_does_not_touch_unrelated_next_index(self, registry):
+        await seed(registry)
+        await registry.upsert_chat(DailyChat(chat_id=1, next_index=2))
+        assert await registry.move_member(1, 0, 1) is True
+        chat = await registry.get_chat(1)
+        assert chat.next_index == 2
+
+    async def test_move_boundary_and_unknown_are_noops(self, registry):
+        await seed(registry)
+        assert await registry.move_member(1, 0, -1) is False
+        assert await registry.move_member(1, 2, 1) is False
+        assert await registry.move_member(1, 99, 1) is False
+        members = await registry.get_members(1)
+        assert [m.username for m in members] == ["@u0", "@u1", "@u2"]
+
+    async def test_skip_date_follows_the_member(self, registry):
+        await seed(registry)
+        await registry.update_member_skip(1, 101, "2026-08-05")  # @u1
+        assert await registry.move_member(1, 1, -1) is True
+        members = await registry.get_members(1)
+        assert [m.username for m in members] == ["@u1", "@u0", "@u2"]
+        assert members[0].skip_date == "2026-08-05"
+
+    async def test_move_is_isolated_per_chat(self, registry):
+        await seed(registry, chat_id=1)
+        await seed(registry, chat_id=2)
+        assert await registry.move_member(1, 0, 1) is True
+        members2 = await registry.get_members(2)
+        assert [m.username for m in members2] == ["@u0", "@u1", "@u2"]
+
+
 class TestVacationsV3:
     """v3 model: many vacations per member in the daily_vacations table."""
 

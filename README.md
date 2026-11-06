@@ -26,7 +26,7 @@ The bot reminds the team who leads today's daily standup. Configuration is per c
 | Command | Description |
 |---|---|
 | `/daily` | Main menu (status + quick actions) |
-| `/team` | Team members: add (by reply or @username), remove |
+| `/team` | Team members: add (by reply or @username), remove, reorder the rotation |
 | `/time` | Set daily standup time (HH:MM) |
 | `/who` | Who leads today (on a non-working day — «нерабочий день» + ближайший дейлик) |
 | `/substitute` | Substitute today's leader |
@@ -39,6 +39,8 @@ The "who leads today" reminder message contains two buttons available to any cha
 
 - **«Подмените меня»** — today's scheduled leader and the scheduled leader of the next working day (следующего РАБОЧЕГО дня) swap places in the schedule for these two days (the member order in the team list is not changed).
 - **«Пропуск»** — one-time skip without substitution (the position in the rotation stays the same).
+
+The `/team` view has an **«Изменить порядок»** button: use the ⬆️/⬇️ arrows to move members up/down in the rotation. The schedule window is rebuilt immediately, vacations and skip dates move together with the member, and the current day's leader does not change because of a reorder.
 
 Ротация сдвигается только в рабочие дни (государственные праздники по данным международного API date.nager.at; при недоступности — Пн–Пт). Выходные и праздники не занимают слот.
 

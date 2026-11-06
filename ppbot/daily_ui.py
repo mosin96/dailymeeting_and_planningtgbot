@@ -28,6 +28,9 @@ PREFIX_MENU = "daily:menu"
 PREFIX_ADD = "daily:add"
 PREFIX_REMOVE = "daily:remove:"
 PREFIX_REMOVE_LIST = "daily:removelist"
+PREFIX_REORDER = "daily:reorder"
+PREFIX_MOVE = "daily:move:"
+PREFIX_NOOP = "daily:noop"
 PREFIX_BACK = "daily:back"
 PREFIX_LEADER = "daily:lead"
 PREFIX_LEAD = "daily:lead:"
@@ -172,6 +175,35 @@ def build_remove_markup(members: List[DailyMember]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def build_reorder_markup(members: List[DailyMember]) -> InlineKeyboardMarkup:
+    """Reorder view: one row per member with up/down arrows around the name.
+
+    The name button is a no-op that just answers the callback; arrows carry
+    the member's POSITION and the direction. Boundary arrows are still shown
+    and the handler reports "уже в начале/конце".
+    """
+    rows = []
+    for m in members:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⬆️",
+                    callback_data="{}{}:up".format(PREFIX_MOVE, m.position),
+                ),
+                InlineKeyboardButton(
+                    text=m.get_display_name(),
+                    callback_data=PREFIX_NOOP,
+                ),
+                InlineKeyboardButton(
+                    text="⬇️",
+                    callback_data="{}{}:down".format(PREFIX_MOVE, m.position),
+                ),
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_TEAM)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _ensure_today_schedule(daily: DailyRegistry, chat: DailyChat, members: List[DailyMember], today, workdays=None) -> Dict[str, Optional[int]]:
     """Ensure the persisted 14-day schedule covers today, return it as dict.
 
@@ -246,7 +278,27 @@ async def show_team(message: Message, daily: DailyRegistry, tz, edit: bool = Fal
         [InlineKeyboardButton(text="✖️ Удалить участника", callback_data=PREFIX_REMOVE_LIST)],
         [InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_MENU)],
     ]
+    if len(members) > 1:
+        rows.insert(1, [InlineKeyboardButton(text="↕️ Изменить порядок", callback_data=PREFIX_REORDER)])
     markup = InlineKeyboardMarkup(inline_keyboard=rows)
+    if edit:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
+
+
+async def show_reorder(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
+    chat_id = message.chat.id
+    members = await daily.get_members(chat_id)
+    if not members:
+        text = "Команда пуста. Добавьте участников через /team"
+    else:
+        text = (
+            "Порядок ротации (сверху — раньше):\n"
+            + member_list_text(members, str(today_in_tz(tz)))
+            + "\n\nПеремещайте участников стрелками — порядок влияет на очередность ведущих."
+        )
+    markup = build_reorder_markup(members)
     if edit:
         await message.edit_text(text, reply_markup=markup)
     else:
