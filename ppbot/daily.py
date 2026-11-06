@@ -127,6 +127,26 @@ class DailyMember:
         m = _AT_HANDLE_RE.search(self.username)
         return m.group(0) if m else None
 
+    def telegram_username(self) -> Optional[str]:
+        """Lower-cased @handle stored on this member, if any."""
+        handle = self.at_handle
+        return handle.lstrip("@").lower() if handle else None
+
+    def matches_telegram_account(self, user_id: int, username: Optional[str]) -> bool:
+        """True when this roster row belongs to the given Telegram account.
+
+        A known user_id always wins. Rows added manually by @username have
+        user_id = NULL (the bot never saw the numeric id); such a row may be
+        matched by the @username from the signed initData — the caller then
+        binds the numeric id to it.
+        """
+        if self.user_id is not None:
+            return self.user_id == user_id
+        handle = self.telegram_username()
+        if not handle or not username:
+            return False
+        return handle == username.lstrip("@").lower()
+
     def to_dict(self) -> dict:
         return {
             "chat_id": self.chat_id,

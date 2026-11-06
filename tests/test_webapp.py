@@ -18,9 +18,11 @@ TOKEN = "12345:test-token"
 TZ = ZoneInfo("UTC")
 
 
-def make_init_data(user_id=777, token=TOKEN, age_seconds=0, start_param=None):
+def make_init_data(user_id=777, token=TOKEN, age_seconds=0, start_param=None, username=None):
     """Build a properly signed Telegram WebApp initData string."""
     user = {"id": user_id, "first_name": "Test"}
+    if username:
+        user["username"] = username
     ts = int(
         (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=age_seconds)).timestamp()
     )
@@ -176,6 +178,75 @@ async def test_non_member_forbidden(client):
     c, storage = client
     await _seed_member(storage, user_id=777)
     resp = await c.get("/api/state?chat=-1001", headers=_headers(make_init_data(user_id=999)))
+    assert resp.status == 403
+    assert "не участник" in await resp.text()
+
+
+@pytest.mark.asyncio
+async def test_manual_member_matched_by_username_and_bound(client):
+    """The frequent production case: a member was added via /team by
+    @username only, so user_id is NULL. The signed initData username must
+    authorize them and then bind the numeric id for the future."""
+    c, storage = client
+    await storage.add_member(
+        DailyMember(chat_id=-1001, position=0, user_id=None, username="Иван @ivanov")
+    )
+    resp = await c.get(
+        "/api/state?chat=-1001",
+        headers=_headers(make_init_data(user_id=777, username="ivanov")),
+    )
+    assert resp.status == 200
+    members = await storage.get_members(-1001)
+    assert members[0].user_id == 777  # bound on first open
+
+    # Once bound, the numeric id alone is enough (even if the username changed)
+    resp = await c.get(
+        "/api/state?chat=-1001",
+        headers=_headers(make_init_data(user_id=777, username="renamed")),
+    )
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_username_match_is_case_insensitive(client):
+    c, storage = client
+    await storage.add_member(
+        DailyMember(chat_id=-1001, position=0, user_id=None, username="Иван @Ivanov")
+    )
+    resp = await c.get(
+        "/api/state?chat=-1001",
+        headers=_headers(make_init_data(user_id=777, username="ivanov")),
+    )
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_bound_username_cannot_hijack_another_account(client):
+    """A row already bound to user 42 must not be taken over by a different
+    Telegram account that happens to own the same @username now."""
+    c, storage = client
+    await storage.add_member(
+        DailyMember(chat_id=-1001, position=0, user_id=42, username="Иван @ivanov")
+    )
+    resp = await c.get(
+        "/api/state?chat=-1001",
+        headers=_headers(make_init_data(user_id=777, username="ivanov")),
+    )
+    assert resp.status == 403
+    members = await storage.get_members(-1001)
+    assert members[0].user_id == 42
+
+
+@pytest.mark.asyncio
+async def test_member_without_username_and_user_id_forbidden(client):
+    c, storage = client
+    await storage.add_member(
+        DailyMember(chat_id=-1001, position=0, user_id=None, username="Иван")
+    )
+    resp = await c.get(
+        "/api/state?chat=-1001",
+        headers=_headers(make_init_data(user_id=777, username="ivanov")),
+    )
     assert resp.status == 403
 
 

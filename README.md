@@ -58,9 +58,18 @@ Vacations are managed in a Telegram mini-app (WebApp): open the `/daily` menu in
 - To add a vacation: select a member chip, tap the first day, then the last day (today or later), confirm in the popup.
 - To remove: tap the colored bar of the vacation and confirm in the popup.
 
-Any member of the daily standup roster can view and edit vacations. Members added manually by name (without a Telegram id) cannot open the mini-app. Every edit (add/remove) instantly rebuilds the daily rotation schedule, so `/who`, reminders and the calendar stay in sync.
+Any member of the daily standup roster can view and edit vacations. Every edit (add/remove) instantly rebuilds the daily rotation schedule, so `/who`, reminders and the calendar stay in sync.
 
-Each request to the mini-app API carries the Telegram `initData` payload; the server checks its signature against the bot token, rejects payloads older than 24 hours, and only answers to users who are actual members of the requested chat.
+How authorization works (`403 Вы не участник этой команды`):
+
+1. Every request carries the Telegram `initData` payload; the server verifies its signature against the bot token and rejects payloads older than 24 hours.
+2. The chat is taken from the signed `start_param` (the `t.me` deep link), never trusted from the query string.
+3. The sender must be in the chat's `/team` roster (`daily_members`):
+   - if the roster row has a Telegram id (member added via reply to their message), it must match the id from `initData`;
+   - rows added manually by `@username` have no id, so they are matched by the signed `@username` from `initData`, and the numeric id is bound to the row on first open (after that the id alone is used, so a later username change does not lock the person out).
+   - a row already bound to another Telegram id is never taken over by a username match.
+
+Members added as an arbitrary name without `@username` (e.g. just «Иван») cannot be matched automatically. To grant them access, remove and re-add them via `/team` with `@username` or by replying to their message — the reply flow stores the Telegram id immediately.
 
 #### Mini-app deployment (HTTPS)
 

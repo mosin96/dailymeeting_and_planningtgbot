@@ -117,7 +117,7 @@ def create_router() -> Router:
     @r.callback_query(F.data == PREFIX_ADD)
     async def add_member_callback(callback: CallbackQuery, state: FSMContext):
         await state.set_state(AddMember.waiting)
-        await callback.message.answer("Пришлите имя участника (например: «Иван @ivanov»)")
+        await callback.message.answer("Пришлите имя участника (например: «Иван @ivanov») или ответьте на его сообщение")
         await callback.answer()
 
     @r.callback_query(F.data == PREFIX_REMOVE_LIST)
@@ -144,7 +144,7 @@ def create_router() -> Router:
         members = await daily.get_members(chat_id)
         text = (message.text or "").strip()
         if not text:
-            await message.answer("Пришлите имя участника (например: «Иван @ivanov»)")
+            await message.answer("Пришлите имя участника (например: «Иван @ivanov») или ответьте на его сообщение")
             return
 
         # Check for duplicates
@@ -154,7 +154,18 @@ def create_router() -> Router:
             await state.clear()
             return
 
-        new_member = DailyMember(chat_id=chat_id, position=len(members), username=text)
+        # Adding by replying to a member's message captures their Telegram id,
+        # so the mini-app can authorize them without any username matching.
+        user_id = None
+        replied = message.reply_to_message.from_user if message.reply_to_message else None
+        if replied is not None and not replied.is_bot:
+            user_id = replied.id
+            if any(m.user_id == user_id for m in members):
+                await message.answer("Уже в команде")
+                await state.clear()
+                return
+
+        new_member = DailyMember(chat_id=chat_id, position=len(members), username=text, user_id=user_id)
 
         new_member.chat_id = chat_id
         new_member.position = len(members)

@@ -333,6 +333,21 @@ class DailyRegistry:
         )
         await self._db.commit()
 
+    async def bind_member_user_id(self, chat_id: int, position: int, user_id: int) -> bool:
+        """Attach a Telegram id to a member added manually by @username.
+
+        Only rows without a known id are updated (never reassigns an id).
+        Returns True when the row was bound.
+        """
+        async with self._db.execute(
+            "UPDATE daily_members SET user_id = ? "
+            "WHERE chat_id = ? AND position = ? AND user_id IS NULL",
+            (user_id, chat_id, position),
+        ) as cursor:
+            bound = cursor.rowcount > 0
+            await self._db.commit()
+        return bound
+
     # ---- vacations (v3 model) ----
 
     async def get_vacations(self, chat_id: int, position: Optional[int] = None) -> List[StoredVacation]:

@@ -166,7 +166,26 @@ def create_app(daily: DailyRegistry, tz, token: str, workdays=None) -> web.Appli
         members = await daily_.get_members(chat_id)
         member = next((m for m in members if m.user_id == data.user.id), None)
         if member is None:
-            raise web.HTTPForbidden(text="Вы не участник этой команды")
+            # Members added manually via /team have no numeric id stored, only
+            # an @username: match the signed initData username and bind the id
+            # so future checks are stable.
+            for candidate in members:
+                if candidate.matches_telegram_account(data.user.id, data.user.username):
+                    await daily_.bind_member_user_id(chat_id, candidate.position, data.user.id)
+                    candidate.user_id = data.user.id
+                    logger.info(
+                        "bound telegram id %s to member position %s in chat %s",
+                        data.user.id,
+                        candidate.position,
+                        chat_id,
+                    )
+                    member = candidate
+                    break
+        if member is None:
+            raise web.HTTPForbidden(
+                text="Вы не участник этой команды. Администратор должен добавить вас "
+                "в /team с вашим @username или ответом на ваше сообщение."
+            )
         return chat_id, member
 
     app.router.add_get("/", index)

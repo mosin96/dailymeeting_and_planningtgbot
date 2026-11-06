@@ -568,6 +568,28 @@ async def test_team_add_by_text_and_duplicate_rejected(dp, bot, session, storage
 
 
 @pytest.mark.asyncio
+async def test_team_add_by_reply_binds_telegram_id(dp, bot, session, storage):
+    """Adding a member by replying to their message stores their Telegram id,
+    so the mini-app authorizes them without username matching."""
+    await seed(storage)
+    session.calls.clear()
+
+    cb = make_callback(make_message("x"), "daily:add", user_id=11)
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+    session.calls.clear()
+
+    replied = make_message("hi", message_id=300, user_id=42, username="dave", first_name="Dave")
+    msg = make_message(
+        "Dave", message_id=201, user_id=11, username="bob", first_name="Bob", reply_to=replied
+    )
+    await feed(dp, bot, storage, Update(update_id=2, message=msg))
+
+    members = await storage.get_members(-1001)
+    assert len(members) == 4
+    assert members[3].user_id == 42
+
+
+@pytest.mark.asyncio
 async def test_substitute_button_works_for_user_id_none_members(dp, bot, session, storage):
     """Regression (live bug): members added by @username have user_id=None.
     build_reminder_markup must still emit a digits payload (position), so the

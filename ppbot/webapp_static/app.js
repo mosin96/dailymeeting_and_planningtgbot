@@ -121,12 +121,13 @@
       opts.body = JSON.stringify(body);
     }
     return fetch(url, opts).then(function (r) {
-      return r.json().then(function (j) {
+      return r.text().then(function (raw) {
+        var j = null;
+        try { j = raw ? JSON.parse(raw) : null; } catch (e) {}
         if (!r.ok) {
-          var msg = j && j.message ? j.message : "Ошибка сервера";
-          throw new Error(msg);
+          throw new Error((j && j.message) || raw || ("Ошибка сервера " + r.status));
         }
-        return j;
+        return j || {};
       });
     });
   }
