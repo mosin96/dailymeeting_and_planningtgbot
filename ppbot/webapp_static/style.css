@@ -156,6 +156,8 @@ button.small { padding: 9px 12px; font-size: 14px; width: auto; flex: 1; }
   font-size: 13px;
   overflow: hidden;
   cursor: pointer;
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 .day.blank { background: transparent; cursor: default; }
 .day.other { color: var(--muted); }
@@ -190,6 +192,36 @@ button.primary, button.secondary {
 button.primary { background: var(--accent); color: #fff; }
 button.primary:disabled { opacity: .5; }
 button.secondary { background: var(--card-2); color: var(--muted); }
+
+.day-tooltip {
+  position: fixed;
+  z-index: 60;
+  max-width: 280px;
+  background: var(--card-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .35);
+  pointer-events: none;
+}
+.day-tooltip .tt-title { font-weight: 700; margin-bottom: 4px; }
+.day-tooltip .tt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.day-tooltip .tt-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.day-tooltip .tt-period { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.day-tooltip .tt-empty { color: var(--muted); }
+.day-tooltip .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 
 .popup {
   position: fixed;

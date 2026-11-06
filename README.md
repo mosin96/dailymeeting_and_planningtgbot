@@ -57,6 +57,7 @@ Vacations are managed in a Telegram mini-app (WebApp): open the `/daily` menu in
 - Team members are shown in a collapsible dropdown with **multi-select**: any combination of members can be displayed at once (the «Все» button selects everyone). By default the member who opened the app is selected, and the **«Я»** button quickly switches back to only your own vacations.
 - To add a vacation: make sure exactly one member is selected (or press «Я»), tap the first day, then the last day (today or later), and confirm in the popup.
 - To remove: tap the colored bar of the vacation and confirm in the popup.
+- Hovering a day shows a tooltip with **everyone from the team who is on vacation that day** (name, color, vacation period; members hidden by the current selection are marked «скрыт»). On touch devices the same tooltip appears on a long press.
 
 Any member of the daily standup roster can view and edit vacations. Every edit (add/remove) instantly rebuilds the daily rotation schedule, so `/who`, reminders and the calendar stay in sync.
 

@@ -240,6 +240,7 @@
   /* ---------- calendar ---------- */
 
   function renderCalendar() {
+    hideDayTooltip();
     var y = state.viewYear, mo = state.viewMonth;
     $("month-title").textContent = MONTHS[mo].charAt(0).toUpperCase() + MONTHS[mo].slice(1) + " " + y;
 
@@ -304,7 +305,99 @@
     return marks;
   }
 
+  /* ---------- day tooltip: who is on vacation that day ---------- */
+
+  function vacationsOn(iso) {
+    var entries = [];
+    state.members.forEach(function (m) {
+      var covering = null;
+      m.vacations.forEach(function (v) {
+        var from = v.start === null ? "0000-01-01" : v.start;  // legacy: ongoing
+        if (iso >= from && iso <= v.end) {
+          if (!covering || v.end < covering.end) covering = v;
+        }
+      });
+      if (covering) entries.push({ member: m, vacation: covering });
+    });
+    return entries;
+  }
+
+  function periodLabel(v) {
+    return v.start === null ? "до " + ruDate(v.end) : ruDate(v.start) + " – " + ruDate(v.end);
+  }
+
+  function buildTooltip(iso) {
+    var box = document.createElement("div");
+    var title = document.createElement("div");
+    title.className = "tt-title";
+    title.textContent = ruDate(iso) + (iso === state.today ? " · сегодня" : "");
+    box.appendChild(title);
+
+    var entries = vacationsOn(iso);
+    if (!entries.length) {
+      var empty = document.createElement("div");
+      empty.className = "tt-empty";
+      empty.textContent = "Никто не в отпуске";
+      box.appendChild(empty);
+      return box;
+    }
+    entries.forEach(function (e) {
+      var row = document.createElement("div");
+      row.className = "tt-row";
+
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = colorOf(e.member.position);
+
+      var name = document.createElement("span");
+      name.className = "tt-name";
+      name.textContent = e.member.name + (isSelected(e.member.position) ? "" : " · скрыт");
+
+      var period = document.createElement("span");
+      period.className = "tt-period";
+      period.textContent = periodLabel(e.vacation);
+
+      row.appendChild(dot);
+      row.appendChild(name);
+      row.appendChild(period);
+      box.appendChild(row);
+    });
+    return box;
+  }
+
+  function positionDayTooltip(x, y) {
+    var el = $("day-tooltip");
+    var rect = el.getBoundingClientRect();
+    var left = Math.max(8, Math.min(x + 14, window.innerWidth - rect.width - 8));
+    var top = y - rect.height - 12;
+    if (top < 8) top = Math.min(window.innerHeight - rect.height - 8, y + 18);
+    el.style.left = left + "px";
+    el.style.top = top + "px";
+  }
+
+  var tooltipIso = null;
+
+  function showDayTooltip(iso, x, y) {
+    var el = $("day-tooltip");
+    if (tooltipIso !== iso) {
+      el.innerHTML = "";
+      el.appendChild(buildTooltip(iso));
+      tooltipIso = iso;
+    }
+    el.classList.remove("hidden");
+    positionDayTooltip(x, y);
+  }
+
+  function hideDayTooltip() {
+    tooltipIso = null;
+    $("day-tooltip").classList.add("hidden");
+  }
+
   function onDayClick(ev) {
+    if (longPressFired) {  // long press already showed the tooltip
+      longPressFired = false;
+      return;
+    }
     var iso = ev.currentTarget.dataset.iso;
     if (!iso) return;
     var today = state.today;
@@ -476,6 +569,48 @@
     selectOnly(state.me);
     setMembersPanel(false);
     setHint("Показаны только ваши отпуска. Нажмите на день, чтобы добавить отпуск.");
+  });
+
+  /* Hover tooltip: whose vacations cover the day. On touch devices the same
+     info appears on a long press, without interfering with day taps. */
+  var longPressTimer = null;
+  var longPressFired = false;
+
+  $("days").addEventListener("mouseover", function (ev) {
+    var cell = ev.target.closest(".day");
+    if (!cell || !cell.dataset.iso) return;
+    showDayTooltip(cell.dataset.iso, ev.clientX, ev.clientY);
+  });
+  $("days").addEventListener("mouseout", function (ev) {
+    if (!ev.target.closest(".day")) return;
+    if (ev.relatedTarget && ev.relatedTarget.closest && ev.relatedTarget.closest(".day")) return;
+    hideDayTooltip();
+  });
+  window.addEventListener("scroll", hideDayTooltip, true);
+  window.addEventListener("resize", hideDayTooltip);
+
+  $("days").addEventListener("touchstart", function (ev) {
+    var cell = ev.target.closest(".day");
+    if (!cell || !cell.dataset.iso) return;
+    longPressFired = false;
+    var touch = ev.touches[0];
+    var iso = cell.dataset.iso;
+    longPressTimer = setTimeout(function () {
+      longPressFired = true;
+      showDayTooltip(iso, touch.clientX, touch.clientY);
+    }, 450);
+  }, { passive: true });
+  $("days").addEventListener("touchmove", function () {
+    clearTimeout(longPressTimer);
+    hideDayTooltip();
+  }, { passive: true });
+  $("days").addEventListener("touchend", function () {
+    clearTimeout(longPressTimer);
+    if (longPressFired) setTimeout(hideDayTooltip, 2500);
+  });
+  $("days").addEventListener("touchcancel", function () {
+    clearTimeout(longPressTimer);
+    hideDayTooltip();
   });
 
   if (!chatId) {

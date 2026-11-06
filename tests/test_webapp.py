@@ -72,6 +72,18 @@ async def test_static_files_exist():
     assert 'id="members-list"' in index
     assert 'id="me-btn"' in index
     assert ">Я<" in index
+    assert 'id="day-tooltip"' in index
+
+
+@pytest.mark.asyncio
+async def test_app_js_implements_day_tooltip():
+    from ppbot.webapp import STATIC_DIR
+
+    code = open(STATIC_DIR + "/app.js", encoding="utf-8").read()
+    assert "vacationsOn" in code
+    assert "showDayTooltip" in code
+    assert "Никто не в отпуске" in code
+    assert "touchstart" in code  # long-press hint on touch devices
 
 
 @pytest.mark.asyncio
