@@ -1,5 +1,6 @@
 """Daily handler smoke tests (buttons: substitute, skip)."""
 import datetime
+import json
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -494,6 +495,77 @@ async def test_daily_menu_smoke(dp, bot, session, storage):
     sends = [p for m, p in session.calls if m == "sendMessage"]
     assert len(sends) == 1
     assert "Участников: 3" in sends[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_daily_deletes_previous_menu_message(dp, bot, session, storage):
+    """A repeated /daily removes the previous menu message from the chat."""
+    await seed(storage)
+    await feed(dp, bot, storage, Update(update_id=1, message=make_message("/daily")))
+
+    # FakeSession returns message_id=1 for every sent message
+    await feed(dp, bot, storage, Update(update_id=2, message=make_message("/daily", message_id=101)))
+
+    deletes = [p for m, p in session.calls if m == "deleteMessage"]
+    assert deletes, "the previous menu message must be deleted"
+    assert deletes[0]["chat_id"] == -1001
+    assert deletes[0]["message_id"] == 1
+    # exactly one fresh menu is left in the chat
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 2
+
+
+@pytest.mark.asyncio
+async def test_daily_deletes_all_tracked_menu_messages(dp, bot, session, storage):
+    """Legacy piles of tracked menus are removed in one go."""
+    await storage.set_meta("daily_menu_msgs:-1001", json.dumps([10, 11, 12]))
+    await seed(storage)
+
+    await feed(dp, bot, storage, Update(update_id=1, message=make_message("/daily")))
+
+    deletes = [p for m, p in session.calls if m == "deleteMessage"]
+    assert [d["message_id"] for d in deletes] == [10, 11, 12]
+
+
+@pytest.mark.asyncio
+async def test_menu_callback_message_is_tracked_and_deleted_next_daily(dp, bot, session, storage):
+    """Pressing «Главное меню» turns that message into the menu; a later
+    /daily deletes it too."""
+    await seed(storage)
+    msg = make_message("original", message_id=55)
+    cb = make_callback(msg, "daily:menu")
+    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
+
+    stored = json.loads(await storage.get_meta("daily_menu_msgs:-1001"))
+    assert stored == [55]
+
+    session.calls.clear()
+    await feed(dp, bot, storage, Update(update_id=2, message=make_message("/daily", message_id=101)))
+    deletes = [p for m, p in session.calls if m == "deleteMessage"]
+    assert any(d["message_id"] == 55 for d in deletes)
+
+
+@pytest.mark.asyncio
+async def test_daily_survives_failed_menu_deletion(dp, bot, session, storage, monkeypatch):
+    """Old menu already deleted / older than 48h: the new menu is still sent."""
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import DeleteMessage
+
+    await storage.set_meta("daily_menu_msgs:-1001", json.dumps([999]))
+    await seed(storage)
+
+    async def boom(chat_id, message_id, **kwargs):
+        raise TelegramBadRequest(
+            method=DeleteMessage(chat_id=chat_id, message_id=message_id),
+            message="Bad Request: message to delete not found",
+        )
+
+    monkeypatch.setattr(bot, "delete_message", boom)
+    await feed(dp, bot, storage, Update(update_id=1, message=make_message("/daily")))
+
+    sends = [p for m, p in session.calls if m == "sendMessage"]
+    assert len(sends) == 1
+    assert json.loads(await storage.get_meta("daily_menu_msgs:-1001")) == [1]
 
 
 @pytest.mark.asyncio

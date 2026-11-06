@@ -25,7 +25,7 @@ The bot reminds the team who leads today's daily standup. Configuration is per c
 
 | Command | Description |
 |---|---|
-| `/daily` | Main menu (status + quick actions) |
+| `/daily` | Main menu (status + quick actions); calling it again deletes the previous menu messages from the chat |
 | `/team` | Team members: add (by reply or @username), remove, reorder the rotation |
 | `/time` | Set daily standup time (HH:MM) |
 | `/who` | Who leads today (on a non-working day — «нерабочий день» + ближайший дейлик) |

@@ -1,10 +1,12 @@
 """Daily standup chat handlers: reminder buttons, /daily, /team, /time, /who, /substitute."""
 from __future__ import annotations
 
+import json
 import re
 from typing import List, Optional
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -99,18 +101,75 @@ async def _refresh_schedule(daily: DailyRegistry, chat_id: int, tz, workdays=Non
     await refresh_schedule_window(daily, chat_id, today_in_tz(tz), workdays=workdays)
 
 
+# Message ids of the bot's /daily menu messages per chat. On the next /daily
+# the whole list is deleted from the chat, so old menus do not pile up.
+MENU_MESSAGES_META = "daily_menu_msgs:"
+MENU_MESSAGES_LIMIT = 20
+
+
+def _menu_meta_key(chat_id: int) -> str:
+    return "{}{}".format(MENU_MESSAGES_META, chat_id)
+
+
+async def _load_menu_message_ids(daily: DailyRegistry, chat_id: int) -> List[int]:
+    raw = await daily.get_meta(_menu_meta_key(chat_id))
+    if not raw:
+        return []
+    try:
+        ids = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(ids, list):
+        return []
+    return [i for i in ids if isinstance(i, int)]
+
+
+async def _remember_menu_message(daily: DailyRegistry, chat_id: int, message_id: int) -> None:
+    ids = await _load_menu_message_ids(daily, chat_id)
+    if message_id in ids:
+        ids.remove(message_id)
+    ids.append(message_id)
+    await daily.set_meta(_menu_meta_key(chat_id), json.dumps(ids[-MENU_MESSAGES_LIMIT:]))
+
+
+async def _delete_previous_menus(message: Message, daily: DailyRegistry) -> None:
+    """Delete every previously tracked /daily menu message in this chat.
+
+    Old messages may already be gone or be older than Telegram's 48h deletion
+    window, so API errors are ignored: the new menu must still be sent.
+    """
+    ids = await _load_menu_message_ids(daily, message.chat.id)
+    if not ids:
+        return
+    for message_id in ids:
+        try:
+            await message.bot.delete_message(message.chat.id, message_id)
+        except TelegramAPIError:
+            pass
+    await daily.delete_meta(_menu_meta_key(message.chat.id))
+
+
 def create_router() -> Router:
     r = Router(name="daily")
 
     @r.message(Command("daily"))
     async def daily_menu(message: Message, daily: DailyRegistry, tz, workdays=None):
         wd = workdays.is_workday if workdays is not None else None
-        await show_menu(message, daily, tz, workdays=wd)
+        # A repeated /daily removes the previous menu messages so the chat
+        # keeps exactly one up-to-date menu.
+        await _delete_previous_menus(message, daily)
+        sent = await show_menu(message, daily, tz, workdays=wd)
+        if sent is not None:
+            await _remember_menu_message(daily, message.chat.id, sent.message_id)
 
     @r.callback_query(F.data == PREFIX_MENU)
     async def menu_callback(callback: CallbackQuery, daily: DailyRegistry, tz, workdays=None):
         wd = workdays.is_workday if workdays is not None else None
         await show_menu(callback.message, daily, tz, workdays=wd, edit=True)
+        # The edited message now shows the main menu: track it as well.
+        await _remember_menu_message(
+            daily, callback.message.chat.id, callback.message.message_id
+        )
         await callback.answer()
 
     @r.callback_query(F.data == PREFIX_TEAM)

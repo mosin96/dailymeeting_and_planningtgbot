@@ -139,6 +139,10 @@ class DailyRegistry:
         )
         await self._db.commit()
 
+    async def delete_meta(self, key: str):
+        await self._db.execute("DELETE FROM daily_meta WHERE key = ?", (key,))
+        await self._db.commit()
+
     # ---- chats ----
 
     async def get_chat(self, chat_id: int) -> Optional[DailyChat]:
@@ -471,6 +475,9 @@ class DailyRegistry:
         await self._db.execute("DELETE FROM daily_members WHERE chat_id = ?", (chat_id,))
         await self._db.execute("DELETE FROM daily_schedule WHERE chat_id = ?", (chat_id,))
         await self._db.execute("DELETE FROM daily_vacations WHERE chat_id = ?", (chat_id,))
+        await self._db.execute(
+            "DELETE FROM daily_meta WHERE key = ?", ("daily_menu_msgs:{}".format(chat_id),)
+        )
         await self._db.commit()
 
     # ---- leader schedule ----

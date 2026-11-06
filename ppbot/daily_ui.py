@@ -226,7 +226,12 @@ async def _schedule_leader(
     return next((m for m in members if m.position == position), None)
 
 
-async def show_menu(message: Message, daily: DailyRegistry, tz, workdays=None, edit: bool = False) -> None:
+async def show_menu(message: Message, daily: DailyRegistry, tz, workdays=None, edit: bool = False):
+    """Render the /daily main menu.
+
+    Returns the freshly sent Message when `edit` is False (so the caller can
+    remember its id and delete it on the next /daily), otherwise None.
+    """
     chat_id = message.chat.id
     chat = await daily.get_chat(chat_id)
     members = await daily.get_members(chat_id)
@@ -265,8 +270,8 @@ async def show_menu(message: Message, daily: DailyRegistry, tz, workdays=None, e
             text += "\nВсе пропущены сегодня"
     if edit:
         await message.edit_text(text, reply_markup=build_menu_markup(chat_id))
-    else:
-        await message.answer(text, reply_markup=build_menu_markup(chat_id))
+        return None
+    return await message.answer(text, reply_markup=build_menu_markup(chat_id))
 
 
 async def show_team(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:

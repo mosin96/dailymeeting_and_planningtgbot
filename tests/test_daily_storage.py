@@ -302,6 +302,11 @@ class TestVacationsV3:
         await registry.delete_chat(1)
         assert await registry.get_vacations(1) == []
 
+    async def test_delete_chat_clears_menu_message_meta(self, registry):
+        await registry.set_meta("daily_menu_msgs:1", "[10, 11]")
+        await registry.delete_chat(1)
+        assert await registry.get_meta("daily_menu_msgs:1") is None
+
     async def test_replace_members_keeps_vacations_of_unchanged_positions(self, registry):
         await registry.add_member(member(1, 0, "A", user_id=1))
         await registry.add_member(member(1, 1, "B", user_id=2))
