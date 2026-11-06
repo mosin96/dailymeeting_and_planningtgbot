@@ -40,13 +40,13 @@ The "who leads today" reminder message contains two buttons available to any cha
 - **«Подмените меня»** — today's scheduled leader and the scheduled leader of the next working day (следующего РАБОЧЕГО дня) swap places in the schedule for these two days (the member order in the team list is not changed).
 - **«Пропуск»** — one-time skip without substitution (the position in the rotation stays the same).
 
-Ротация сдвигается только в рабочие дни (производственный календарь РФ, isdayoff.ru; при недоступности API — Пн–Пт). Выходные и праздники не занимают слот.
+Ротация сдвигается только в рабочие дни (государственные праздники по данным международного API date.nager.at; при недоступности — Пн–Пт). Выходные и праздники не занимают слот.
 
 The `/daily` menu also has these quick-action buttons:
 
 - **«Выбрать ведущего»** — opens a member picker to manually set today's leader.
 - **«Запланир. отпуска»** — planned vacations view (also available via `/vacplan`).
-- **«Напомн. о трудозатратах»** — opens a settings menu for work-hours logging reminders: a toggle to enable/disable (`/costremind`) and a reminder time (default 17:00). On the last workday of the week the bot sends «Не забудьте списать трудозатраты за неделю! Хороших выходных!», and on the last workday of the month «Не забудьте списать трудозатраты за месяц!» (last workday determined via the RU production calendar, isdayoff.ru).
+- **«Напомн. о трудозатратах»** — opens a settings menu for work-hours logging reminders: a toggle to enable/disable (`/costremind`) and a reminder time (default 17:00). On the last workday of the week the bot sends «Не забудьте списать трудозатраты за неделю! Хороших выходных!», and on the last workday of the month «Не забудьте списать трудозатраты за месяц!» (last workday determined via the public-holidays calendar, date.nager.at).
 - **«📅 Отпуска (мини-апп)»** — opens the mini-app vacation calendar (shown when the bot username is known at startup, see the Mini-app section).
 
 ### Vacation calendar mini-app
@@ -121,7 +121,9 @@ Vacations live in the `daily_vacations` SQLite table (`id`, `chat_id`, `position
 
 While a member is on vacation (any period covering today) they are automatically skipped in every rotation path (reminder tag, `/who`, `/daily` status, substitute, skip). The team list shows a `(в отпуске до ДД.ММ.ГГГГ)` suffix, and the 15-minute reminder appends `В отпуске: Имя (до ДД.ММ.ГГГГ)` using plain names (no `@` mention, no link).
 
-Workdays are synchronized with the public `isdayoff.ru` API (Russian corporate calendar, includes public holidays and rescheduled days). If the API is unavailable, the bot falls back to Mon–Fri.
+Workdays are synchronized with the international [Nager.Date](https://date.nager.at) public-holidays API for the country configured in `PP_WORKDAY_COUNTRY` (ISO code, default `RU`, which includes New Year holidays and other Russian public holidays). A day is a workday when it is Mon–Fri and not a public holiday. The API needs no token and results are cached for 24 hours; if it is unavailable, the bot falls back to Mon–Fri (with a short negative cache, so an outage is logged once instead of every 30 seconds).
+
+> Note: public-holiday services list official holidays but not ad-hoc government transfers of days off and working weekends («переносы»), so such days are treated as ordinary weekdays.
 
 All commands are registered in the Telegram command menu (bottom-left "/" button) via `set_my_commands`.
 
@@ -142,6 +144,7 @@ It will recreate the image and container `ppbot`. The bot uses a sqlite database
 | `PP_BOT_TOKEN` | yes | — | Telegram bot token |
 | `PP_BOT_DB_PATH` | no | `~/.tg_pp_bot.db` | SQLite database path |
 | `PP_BOT_TZ` | no | `Europe/Moscow` | Timezone for daily reminders (IANA name, e.g. `Europe/Moscow`) |
+| `PP_WORKDAY_COUNTRY` | no | `RU` | ISO country code for the public-holidays calendar (date.nager.at), e.g. `RU`, `BY`, `KZ`, `DE` |
 | `PP_WEBAPP_PORT` / `PP_WEBAPP_CERT` / `PP_WEBAPP_KEY` / `PP_WEBAPP_PUBLIC_URL` | no | see Mini-app section | Mini-app (vacation calendar) server settings |
 
 ## Development
