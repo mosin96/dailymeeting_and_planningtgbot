@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 import aiosqlite
 
-from ppbot.daily import DailyChat, DailyMember, SCHEDULE_DAYS, build_schedule
+from ppbot.daily import DailyChat, DailyMember, Vacation, SCHEDULE_DAYS, build_schedule
+
+
+class StoredVacation(NamedTuple):
+    """One daily_vacations row: the member it belongs to + the period."""
+    position: int
+    vacation: Vacation
 
 
 class DailyRegistry:
@@ -55,6 +61,20 @@ class DailyRegistry:
                 PRIMARY KEY (chat_id, date)
             )
         """)
+        # Multiple vacations per member: standalone table (v3 vacation model).
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS daily_vacations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                start_date TEXT,
+                end_date TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_vac_chat_pos ON daily_vacations(chat_id, position)"
+        )
         # migrate older DBs: add the scheduler-state columns if missing
         async with self._db.execute("PRAGMA table_info(daily_chats)") as cursor:
             cols = [row[1] for row in await cursor.fetchall()]
@@ -79,6 +99,28 @@ class DailyRegistry:
             await self._db.execute("ALTER TABLE daily_members ADD COLUMN vacation_until TEXT")
         if "vacation_start" not in mcols:
             await self._db.execute("ALTER TABLE daily_members ADD COLUMN vacation_start TEXT")
+        # migrate the v2 vacation model (one vacation per member, stored as
+        # daily_members columns) into the v3 daily_vacations table, then clear
+        # the legacy columns. Idempotent: after the first pass no non-NULL
+        # legacy values remain, so re-running inserts nothing.
+        async with self._db.execute(
+            "SELECT chat_id, position, vacation_until, vacation_start "
+            "FROM daily_members WHERE vacation_until IS NOT NULL"
+        ) as cursor:
+            legacy = await cursor.fetchall()
+        if legacy:
+            await self._db.executemany(
+                "INSERT INTO daily_vacations (chat_id, position, start_date, end_date) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    (row[0], row[1], row[3], row[2])
+                    for row in legacy
+                ],
+            )
+            await self._db.execute(
+                "UPDATE daily_members SET vacation_until = NULL, vacation_start = NULL "
+                "WHERE vacation_until IS NOT NULL"
+            )
         await self._db.commit()
 
     # ---- meta ----
@@ -191,12 +233,17 @@ class DailyRegistry:
 
     async def get_members(self, chat_id: int) -> List[DailyMember]:
         query = (
-            "SELECT chat_id, position, user_id, username, first_name, skip_date, "
-            "vacation_until, vacation_start "
+            "SELECT chat_id, position, user_id, username, first_name, skip_date "
             "FROM daily_members WHERE chat_id = ? ORDER BY position"
         )
         async with self._db.execute(query, (chat_id,)) as cursor:
             rows = await cursor.fetchall()
+        # Vacations live in the daily_vacations table (v3 model): many periods
+        # per member, keyed by (chat_id, position).
+        vacations = await self.get_vacations(chat_id)
+        by_position: Dict[int, List[Vacation]] = {}
+        for v in vacations:
+            by_position.setdefault(v.position, []).append(v.vacation)
         result = []
         for r in rows:
             db_username = r[3]
@@ -217,8 +264,7 @@ class DailyRegistry:
                 user_id=r[2],
                 username=name,
                 skip_date=r[5],
-                vacation_until=r[6],
-                vacation_start=r[7],
+                vacations=by_position.get(r[1], []),
             ))
         return result
 
@@ -226,10 +272,10 @@ class DailyRegistry:
         async with self._db.execute("BEGIN"):
             await self._db.execute("DELETE FROM daily_members WHERE chat_id = ?", (chat_id,))
             await self._db.executemany(
-                "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date, vacation_until, vacation_start) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 [
-                    (m.chat_id, m.position, m.user_id, m.username, m.username, m.skip_date, m.vacation_until, m.vacation_start)
+                    (m.chat_id, m.position, m.user_id, m.username, m.username, m.skip_date)
                     for m in members
                 ],
             )
@@ -237,9 +283,9 @@ class DailyRegistry:
 
     async def add_member(self, member: DailyMember):
         await self._db.execute(
-            "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date, vacation_until, vacation_start) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (member.chat_id, member.position, member.user_id, member.username, member.username, member.skip_date, member.vacation_until, member.vacation_start),
+            "INSERT INTO daily_members (chat_id, position, user_id, username, first_name, skip_date) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (member.chat_id, member.position, member.user_id, member.username, member.username, member.skip_date),
         )
         await self._db.commit()
 
@@ -263,6 +309,16 @@ class DailyRegistry:
                 "WHERE chat_id = ? AND position > ?",
                 (chat_id, position),
             )
+            # keep the vacation table in sync with the reindexed positions
+            await self._db.execute(
+                "DELETE FROM daily_vacations WHERE chat_id = ? AND position = ?",
+                (chat_id, position),
+            )
+            await self._db.execute(
+                "UPDATE daily_vacations SET position = position - 1 "
+                "WHERE chat_id = ? AND position > ?",
+                (chat_id, position),
+            )
             chat = await self.get_chat(chat_id)
             if chat is not None:
                 if chat.next_index > position:
@@ -277,18 +333,73 @@ class DailyRegistry:
         )
         await self._db.commit()
 
-    async def update_member_vacation(self, chat_id: int, position: int, vacation_until: Optional[str], vacation_start: Optional[str] = None):
+    # ---- vacations (v3 model) ----
+
+    async def get_vacations(self, chat_id: int, position: Optional[int] = None) -> List[StoredVacation]:
+        """All vacations of a chat (or one member), ordered by position/date.
+
+        Legacy migrated rows have start_date = NULL ("продолжается до end").
+        """
+        query = (
+            "SELECT id, position, start_date, end_date FROM daily_vacations "
+            "WHERE chat_id = ?"
+        )
+        params: tuple = (chat_id,)
+        if position is not None:
+            query += " AND position = ?"
+            params = (chat_id, position)
+        query += (
+            " ORDER BY position,"
+            " CASE WHEN start_date IS NULL THEN 0 ELSE 1 END, start_date, end_date, id"
+        )
+        async with self._db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            StoredVacation(
+                position=row[1],
+                vacation=Vacation(start=row[2], end=row[3], id=row[0]),
+            )
+            for row in rows
+        ]
+
+    async def add_vacation(
+        self, chat_id: int, position: int, start: Optional[str], end: str
+    ) -> Optional[Vacation]:
+        """Insert a vacation period; returns the stored Vacation or None if
+        the member does not exist."""
+        async with self._db.execute(
+            "SELECT position FROM daily_members WHERE chat_id = ? AND position = ?",
+            (chat_id, position),
+        ) as cursor:
+            member = await cursor.fetchone()
+        if member is None:
+            return None
         await self._db.execute(
-            "UPDATE daily_members SET vacation_until = ?, vacation_start = ? WHERE chat_id = ? AND position = ?",
-            (vacation_until, vacation_start, chat_id, position),
+            "INSERT INTO daily_vacations (chat_id, position, start_date, end_date) "
+            "VALUES (?, ?, ?, ?)",
+            (chat_id, position, start, end),
         )
         await self._db.commit()
+        async with self._db.execute("SELECT last_insert_rowid()") as cursor:
+            vac_id = (await cursor.fetchone())[0]
+        return Vacation(start=start, end=end, id=vac_id)
+
+    async def delete_vacation(self, chat_id: int, vacation_id: int) -> bool:
+        """Delete one vacation by id. True when a row was actually removed."""
+        async with self._db.execute(
+            "DELETE FROM daily_vacations WHERE chat_id = ? AND id = ?",
+            (chat_id, vacation_id),
+        ) as cursor:
+            deleted = cursor.rowcount > 0
+            await self._db.commit()
+        return deleted
 
     async def delete_chat(self, chat_id: int):
         """Reset all daily data for a chat: config, rotation state, members, schedule."""
         await self._db.execute("DELETE FROM daily_chats WHERE chat_id = ?", (chat_id,))
         await self._db.execute("DELETE FROM daily_members WHERE chat_id = ?", (chat_id,))
         await self._db.execute("DELETE FROM daily_schedule WHERE chat_id = ?", (chat_id,))
+        await self._db.execute("DELETE FROM daily_vacations WHERE chat_id = ?", (chat_id,))
         await self._db.commit()
 
     # ---- leader schedule ----
@@ -434,3 +545,16 @@ class DailyRegistry:
     async def close(self):
         if self._db is not None:
             await self._db.close()
+
+
+async def refresh_schedule_window(daily: "DailyRegistry", chat_id: int, today, workdays=None) -> None:
+    """Recompute the persisted 14-day leader window after a roster/vacation change.
+
+    Shared by the chat handlers and the mini-app HTTP API (a vacation change
+    alters who is available on which day).
+    """
+    chat = await daily.get_chat(chat_id)
+    if chat is None:
+        return
+    members = await daily.get_members(chat_id)
+    await daily.rebuild_schedule(chat_id, chat.next_index, members, today, workdays=workdays)

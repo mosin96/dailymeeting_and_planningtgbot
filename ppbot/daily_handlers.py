@@ -15,13 +15,14 @@ from ppbot.daily import (
     DailyMember,
     apply_skip,
     apply_substitute,
-    format_ru_date,
     next_scheduled_date,
-    parse_vacation_range,
     set_leader,
     today_in_tz,
 )
-from ppbot.daily_storage import DailyRegistry
+from ppbot.daily_storage import (
+    DailyRegistry,
+    refresh_schedule_window,
+)
 from ppbot.game import GameRegistry
 from ppbot.daily_ui import (
     GREETING_HELP,
@@ -39,9 +40,7 @@ from ppbot.daily_ui import (
     PREFIX_SUB,
     PREFIX_TEAM,
     PREFIX_TIME,
-    PREFIX_VAC,
     PREFIX_VACPLAN,
-    PREFIX_VACATION,
     PREFIX_WHO,
     _ensure_today_schedule,
     _schedule_leader,
@@ -62,10 +61,6 @@ class AddMember(StatesGroup):
 
 
 class SetTime(StatesGroup):
-    waiting = State()
-
-
-class SetVacation(StatesGroup):
     waiting = State()
 
 
@@ -97,11 +92,7 @@ def _resolve_member(members: List[DailyMember], text: str) -> Optional[DailyMemb
 
 async def _refresh_schedule(daily: DailyRegistry, chat_id: int, tz, workdays=None) -> None:
     """Recompute the persisted 14-day leader window after a roster change."""
-    chat = await daily.get_chat(chat_id)
-    if chat is None:
-        return
-    members = await daily.get_members(chat_id)
-    await daily.rebuild_schedule(chat_id, chat.next_index, members, today_in_tz(tz), workdays=workdays)
+    await refresh_schedule_window(daily, chat_id, today_in_tz(tz), workdays=workdays)
 
 
 def create_router() -> Router:
@@ -390,135 +381,17 @@ def create_router() -> Router:
 
     # ---- vacation ----
 
-    @r.callback_query(F.data == PREFIX_VACATION)
-    async def vacation_picker_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
-        members = await daily.get_members(callback.message.chat.id)
-        if not members:
-            await callback.message.answer("Команда пуста. Добавьте участников через /team")
-            await callback.answer()
-            return
-        today_s = str(today_in_tz(tz))
-        has_future = any(
-            m.vacation_start is not None and m.vacation_start > today_s
-            for m in members
-        )
-        await callback.message.edit_text(
-            "Кто уходит в отпуск?",
-            reply_markup=build_member_picker_markup(members, PREFIX_VAC, vacplan_button=has_future),
-        )
-        await callback.answer()
-
-    @r.callback_query(F.data.regexp(r"^{}(\d+)$".format(PREFIX_VAC)))
-    async def vacation_pick_callback(callback: CallbackQuery, state: FSMContext, daily: DailyRegistry):
-        position = int(callback.data[len(PREFIX_VAC):])
-        await state.set_state(SetVacation.waiting)
-        await state.update_data(vacation_position=position)
-        await callback.message.answer("До какой даты отпуск? (ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ, «снять» — убрать)")
-        await callback.answer()
+    # Vacation editing moved to the mini-app calendar (PP_WEBAPP_PUBLIC_URL);
+    # the chat-side /vacation command and the inline picker are removed.
 
     @r.callback_query(F.data == PREFIX_VACPLAN)
     async def vacplan_callback(callback: CallbackQuery, daily: DailyRegistry, tz):
         await show_planned_vacations(callback.message, daily, tz, edit=True)
         await callback.answer()
 
-    @r.message(Command("vacation"))
-    async def vacation_command(message: Message, state: FSMContext, daily: DailyRegistry, tz, workdays=None):
-        wd = workdays.is_workday if workdays is not None else None
-        members = await daily.get_members(message.chat.id)
-        if not members:
-            await message.answer("Команда пуста. Добавьте участников через /team")
-            return
-        member = None
-        if message.reply_to_message and message.reply_to_message.from_user:
-            member = next(
-                (m for m in members if m.user_id == message.reply_to_message.from_user.id),
-                None,
-            )
-        if member is None:
-            text = (message.text or "").replace("/vacation", "", 1).strip()
-            arg_parts = text.split(None, 1)
-            name_part = arg_parts[0] if arg_parts else ""
-            member = _resolve_member(members, name_part)
-            date_part = arg_parts[1] if len(arg_parts) > 1 else ""
-        else:
-            text = (message.text or "").replace("/vacation", "", 1).strip()
-            arg_parts = text.split(None, 1)
-            date_part = arg_parts[0] if arg_parts else ""
-        if member is None:
-            await message.answer("Не нашёл участника. Напишите /vacation @ник ДД.ММ.ГГГГ или ответьте на сообщение")
-            return
-        if date_part in ("снять", "нет", "0"):
-            await daily.update_member_vacation(message.chat.id, member.position, None, None)
-            await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
-            await message.answer("{} вернулся в ротацию".format(member.get_display_name(str(today_in_tz(tz)))))
-            return
-        if date_part:
-            parsed = parse_vacation_range(date_part)
-            if parsed is None:
-                await message.answer(
-                    "Неверный формат даты. Пришлите ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ"
-                )
-                return
-            start, end = parsed
-            await daily.update_member_vacation(message.chat.id, member.position, end, start)
-            await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
-            if start is None:
-                await message.answer(
-                    "{} в отпуске до {}".format(member.get_display_name(str(today_in_tz(tz))), format_ru_date(end))
-                )
-            else:
-                await message.answer(
-                    "{} в отпуске с {} по {}".format(
-                        member.get_display_name(str(today_in_tz(tz))), format_ru_date(start), format_ru_date(end)
-                    )
-                )
-            return
-        await state.set_state(SetVacation.waiting)
-        await state.update_data(vacation_position=member.position)
-        await message.answer("До какой даты отпуск? (ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ, «снять» — убрать)")
-
     @r.message(Command("vacplan"))
     async def vacplan_command(message: Message, daily: DailyRegistry, tz):
         await show_planned_vacations(message, daily, tz, edit=False)
-
-    @r.message(SetVacation.waiting)
-    async def vacation_input(message: Message, state: FSMContext, daily: DailyRegistry, tz, workdays=None):
-        wd = workdays.is_workday if workdays is not None else None
-        text = (message.text or "").strip()
-        data = await state.get_data()
-        position = data.get("vacation_position")
-        members = await daily.get_members(message.chat.id)
-        member = next((m for m in members if m.position == position), None)
-        if member is None:
-            await message.answer("Участник не найден, попробуйте ещё раз")
-            await state.clear()
-            return
-        if text in ("снять", "нет", "0"):
-            await daily.update_member_vacation(message.chat.id, member.position, None, None)
-            await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
-            await message.answer("{} вернулся в ротацию".format(member.get_display_name(str(today_in_tz(tz)))))
-            await state.clear()
-            return
-        parsed = parse_vacation_range(text)
-        if parsed is None:
-            await message.answer(
-                "Неверный формат даты. Пришлите ДД.ММ.ГГГГ или ДД.ММ.ГГГГ-ДД.ММ.ГГГГ"
-            )
-            return
-        start, end = parsed
-        await daily.update_member_vacation(message.chat.id, member.position, end, start)
-        await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
-        if start is None:
-            await message.answer(
-                "{} в отпуске до {}".format(member.get_display_name(str(today_in_tz(tz))), format_ru_date(end))
-            )
-        else:
-            await message.answer(
-                "{} в отпуске с {} по {}".format(
-                    member.get_display_name(str(today_in_tz(tz))), format_ru_date(start), format_ru_date(end)
-                )
-            )
-        await state.clear()
 
     # ---- cost-reminder settings ----
 

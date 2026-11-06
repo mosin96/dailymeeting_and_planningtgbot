@@ -21,10 +21,12 @@ def test_greeting_contains_all_commands():
         assert "/{}".format(cmd) in bot_module.GREETING
 
 
-def test_commands_are_13_unique():
+def test_commands_are_12_unique():
     cmds = [cmd for cmd, _ in bot_module.COMMANDS]
-    assert len(cmds) == 13
-    assert len(set(cmds)) == 13
+    assert len(cmds) == 12
+    assert len(set(cmds)) == 12
+    # /vacation был удалён: править отпуска теперь через мини-апп
+    assert "vacation" not in cmds
 
 
 @pytest.mark.asyncio

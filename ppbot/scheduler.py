@@ -46,7 +46,7 @@ def reminder_text(leader, members, today) -> str:
     vacationers = [m for m in members if m.is_on_vacation(today)]
     if vacationers:
         parts = ", ".join(
-            "{} (до {})".format(m.plain_name, format_ru_date(m.vacation_until))
+            "{} (до {})".format(m.plain_name, format_ru_date(m.active_vacation(today).end))
             for m in vacationers
         )
         text += "\nВ отпуске: {}".format(parts)

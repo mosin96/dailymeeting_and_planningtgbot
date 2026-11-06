@@ -313,7 +313,7 @@ async def test_loop_mentions_vacationers_without_at(storage):
     from ppbot.scheduler import reminder_loop
 
     await seed_chat(storage, members=3)
-    await storage.update_member_vacation(1, 1, "2026-08-05")  # U1 on vacation through Aug 5
+    await storage.add_vacation(1, 1, None, "2026-08-05")  # U1 on vacation through Aug 5
     bot = FakeBot()
     now = datetime.datetime(2026, 8, 3, 9, 45)
     await run_one_iteration(reminder_loop, bot, storage, FakeWorkdays(True), FakeClock([now, now + datetime.timedelta(seconds=35)]))
@@ -344,7 +344,7 @@ async def test_loop_leader_skips_vacationer_in_tag(storage):
     from ppbot.scheduler import reminder_loop
 
     await seed_chat(storage, members=3)
-    await storage.update_member_vacation(1, 0, "2026-08-05")
+    await storage.add_vacation(1, 0, None, "2026-08-05")
     bot = FakeBot()
     now = datetime.datetime(2026, 8, 3, 9, 45)
     await run_one_iteration(reminder_loop, bot, storage, FakeWorkdays(True), FakeClock([now, now + datetime.timedelta(seconds=35)]))

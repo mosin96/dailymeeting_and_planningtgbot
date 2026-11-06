@@ -354,7 +354,15 @@ async def test_who_command_shows_leader_with_buttons(dp, bot, session, storage):
 
 
 @pytest.mark.asyncio
-async def test_who_shows_tomorrow_leader(dp, bot, session, storage):
+async def test_who_shows_tomorrow_leader(dp, bot, session, storage, monkeypatch):
+    """Regression-guard against date dependence: pin today to a Monday so
+    tomorrow is a workday on any real-world run day."""
+    from ppbot import daily_handlers
+    from ppbot import daily_ui
+
+    ref = datetime.date(2026, 8, 3)
+    monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: ref)
+    monkeypatch.setattr(daily_ui, "today_in_tz", lambda tz: ref)
     await seed(storage, next_index=0)
     msg = make_message("/who")
     await feed(dp, bot, storage, Update(update_id=1, message=msg))
@@ -366,12 +374,18 @@ async def test_who_shows_tomorrow_leader(dp, bot, session, storage):
 
 
 @pytest.mark.asyncio
-async def test_who_shows_vacationers(dp, bot, session, storage):
+async def test_who_shows_vacationers(dp, bot, session, storage, monkeypatch):
     """who output syncs with the scheduler reminder: vacationers listed by
     plain name (no @), and tomorrow's leader skips the vacationer."""
+    from ppbot import daily_handlers
+    from ppbot import daily_ui
+
+    ref = datetime.date(2026, 8, 3)
+    monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: ref)
+    monkeypatch.setattr(daily_ui, "today_in_tz", lambda tz: ref)
     await seed(storage, next_index=0)
-    await storage.update_member_vacation(
-        -1001, 1, (datetime.datetime.now(TZ) + datetime.timedelta(days=5)).strftime("%Y-%m-%d")
+    await storage.add_vacation(
+        -1001, 1, None, (datetime.datetime.now(TZ) + datetime.timedelta(days=5)).strftime("%Y-%m-%d")
     )
     msg = make_message("/who")
     await feed(dp, bot, storage, Update(update_id=1, message=msg))
@@ -476,7 +490,7 @@ async def test_daily_menu_counts_out_vacationers(dp, bot, session, storage):
     vacation is counted out of the headcount and listed separately."""
     await seed(storage)
     until_dt = datetime.datetime.now(TZ) + datetime.timedelta(days=5)
-    await storage.update_member_vacation(-1001, 1, until_dt.strftime("%Y-%m-%d"))
+    await storage.add_vacation(-1001, 1, None, until_dt.strftime("%Y-%m-%d"))
     msg = make_message("/daily")
     await feed(dp, bot, storage, Update(update_id=1, message=msg))
 
@@ -617,7 +631,8 @@ async def test_team_remove_reindexes(dp, bot, session, storage):
 # ---- T5: menu buttons and member picker ----
 
 @pytest.mark.asyncio
-async def test_menu_has_leader_and_vacation_buttons(dp, bot, session, storage):
+async def test_menu_has_leader_and_vacplan_buttons(dp, bot, session, storage, monkeypatch):
+    monkeypatch.delenv("PP_WEBAPP_PUBLIC_URL", raising=False)
     await seed(storage)
     msg = make_message("/daily")
     await feed(dp, bot, storage, Update(update_id=1, message=msg))
@@ -631,7 +646,7 @@ async def test_menu_has_leader_and_vacation_buttons(dp, bot, session, storage):
         for btn in row
     ]
     assert "daily:lead" in flat
-    assert "daily:vac" in flat
+    assert "daily:vacplan" in flat
 
 
 def test_build_member_picker_markup_carries_positions():
@@ -655,17 +670,18 @@ def test_build_member_picker_markup_carries_positions():
 
 
 def test_build_member_picker_markup_empty_members_still_has_back():
-    from ppbot.daily_ui import PREFIX_VAC, build_member_picker_markup
+    from ppbot.daily_ui import PREFIX_LEAD, build_member_picker_markup
 
-    markup = build_member_picker_markup([], PREFIX_VAC)
+    markup = build_member_picker_markup([], PREFIX_LEAD)
     flat = [btn.callback_data for row in markup.inline_keyboard for btn in row]
     assert flat == ["daily:menu"]
 
 
-def test_build_menu_markup_has_cost_remind_button():
+def test_build_menu_markup_has_cost_remind_button(monkeypatch):
     from ppbot.daily_ui import build_menu_markup
 
-    markup = build_menu_markup()
+    monkeypatch.delenv("PP_WEBAPP_PUBLIC_URL", raising=False)
+    markup = build_menu_markup(-1001)
     flat = [
         (btn.text, btn.callback_data)
         for row in markup.inline_keyboard
@@ -679,7 +695,7 @@ def test_build_menu_markup_has_cost_remind_button():
         ("Кто сегодня ведёт", "daily:who"),
         ("Справка", "daily:help"),
         ("Выбрать ведущего", "daily:lead"),
-        ("Отпуск", "daily:vac"),
+        ("Запланир. отпуска", "daily:vacplan"),
     }
     assert existing.issubset(set(flat))
 
@@ -770,7 +786,7 @@ async def test_setleader_unknown_member_rejected(dp, bot, session, storage):
 @pytest.mark.asyncio
 async def test_setleader_vacationer_rejected(dp, bot, session, storage):
     await seed(storage, next_index=0)
-    await storage.update_member_vacation(-1001, 1, "2099-01-01")
+    await storage.add_vacation(-1001, 1, None, "2099-01-01")
     msg = make_message("/setleader @b")
     await feed(dp, bot, storage, Update(update_id=1, message=msg))
 
@@ -827,7 +843,7 @@ async def test_leader_picker_selects_member(dp, bot, session, storage):
 @pytest.mark.asyncio
 async def test_leader_picker_vacationer_rejected(dp, bot, session, storage):
     await seed(storage, next_index=0)
-    await storage.update_member_vacation(-1001, 1, "2099-01-01")
+    await storage.add_vacation(-1001, 1, None, "2099-01-01")
     msg = make_message("original")
     cb = make_callback(msg, "daily:lead:1")
     await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
@@ -839,237 +855,28 @@ async def test_leader_picker_vacationer_rejected(dp, bot, session, storage):
     assert chat.next_index == 0
 
 
-# ---- T6: /vacation command, FSM, and vacation picker ----
+# ---- T6: vacations moved to the mini-app ----
 
 @pytest.mark.asyncio
-async def test_vacation_command_sets_date(dp, bot, session, storage):
+async def test_vacation_command_removed(dp, bot, session, storage):
+    """/vacation is gone: nothing responds to it."""
     await seed(storage)
     msg = make_message("/vacation @b 05.08.2026")
     await feed(dp, bot, storage, Update(update_id=1, message=msg))
 
     sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "@b в отпуске до 05.08.2026" in sends[0]["text"]
+    assert sends == []  # no handler matches the removed command
     members = await storage.get_members(-1001)
-    assert members[1].vacation_until == "2026-08-05"
-
-
-@pytest.mark.asyncio
-async def test_vacation_command_iso_date(dp, bot, session, storage):
-    await seed(storage)
-    msg = make_message("/vacation @b 2026-08-05")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "@b в отпуске до 05.08.2026" in sends[0]["text"]
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_until == "2026-08-05"
-
-
-@pytest.mark.asyncio
-async def test_vacation_command_by_reply(dp, bot, session, storage):
-    await seed(storage)
-    replied = make_message("/who", message_id=200, user_id=3, username="carol", first_name="C")
-    msg = make_message("/vacation 05.08.2026", message_id=201, user_id=10, username="alice", first_name="A", reply_to=replied)
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "@c в отпуске до 05.08.2026" in sends[0]["text"]
-    members = await storage.get_members(-1001)
-    assert members[2].vacation_until == "2026-08-05"
-
-
-@pytest.mark.asyncio
-async def test_vacation_command_sets_range(dp, bot, session, storage):
-    await seed(storage)
-    msg = make_message("/vacation @b 01.08.2026-10.08.2026")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "@b в отпуске с 01.08.2026 по 10.08.2026" in sends[0]["text"]
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_start == "2026-08-01"
-    assert members[1].vacation_until == "2026-08-10"
-
-
-@pytest.mark.asyncio
-async def test_vacation_command_clear(dp, bot, session, storage):
-    await seed(storage)
-    await storage.update_member_vacation(-1001, 1, "2026-08-05", "2026-08-01")
-    msg = make_message("/vacation @b снять")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "@b вернулся в ротацию" in sends[0]["text"]
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_until is None
-    assert members[1].vacation_start is None
-
-
-@pytest.mark.asyncio
-async def test_vacation_command_invalid_date_rejected(dp, bot, session, storage):
-    await seed(storage)
-    msg = make_message("/vacation @b 32.13.2026")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "Неверный формат даты" in sends[0]["text"]
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_until is None
-
-
-@pytest.mark.asyncio
-async def test_vacation_command_inverted_range_rejected(dp, bot, session, storage):
-    await seed(storage)
-    msg = make_message("/vacation @b 10.08.2026-01.08.2026")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "Неверный формат даты" in sends[0]["text"]
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_start is None
-    assert members[1].vacation_until is None
-
-
-@pytest.mark.asyncio
-async def test_vacation_command_unknown_member_rejected(dp, bot, session, storage):
-    await seed(storage)
-    msg = make_message("/vacation @nobody 05.08.2026")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "Не нашёл участника" in sends[0]["text"]
-
-
-@pytest.mark.asyncio
-async def test_vacation_command_starts_fsm_without_date(dp, bot, session, storage):
-    await seed(storage)
-    msg = make_message("/vacation @b")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "До какой даты отпуск?" in sends[0]["text"]
-
-    session.calls.clear()
-    msg2 = make_message("05.08.2026")
-    await feed(dp, bot, storage, Update(update_id=2, message=msg2))
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "@b в отпуске до 05.08.2026" in sends[0]["text"]
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_until == "2026-08-05"
-
-
-@pytest.mark.asyncio
-async def test_vacation_fsm_invalid_then_valid(dp, bot, session, storage):
-    await seed(storage)
-    msg = make_message("/vacation @b")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-    session.calls.clear()
-
-    # invalid keeps FSM active
-    msg2 = make_message("not-a-date")
-    await feed(dp, bot, storage, Update(update_id=2, message=msg2))
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert any("Неверный формат даты" in s.get("text", "") for s in sends)
-    session.calls.clear()
-
-    # still in FSM: next message is consumed as the date
-    msg3 = make_message("06.08.2026")
-    await feed(dp, bot, storage, Update(update_id=3, message=msg3))
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert any("@b в отпуске до 06.08.2026" in s.get("text", "") for s in sends)
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_until == "2026-08-06"
-
-
-@pytest.mark.asyncio
-async def test_vacation_fsm_sets_range(dp, bot, session, storage):
-    await seed(storage)
-    msg = make_message("/vacation @b")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-    session.calls.clear()
-
-    msg2 = make_message("01.08.2026-10.08.2026")
-    await feed(dp, bot, storage, Update(update_id=2, message=msg2))
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "@b в отпуске с 01.08.2026 по 10.08.2026" in sends[0]["text"]
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_start == "2026-08-01"
-    assert members[1].vacation_until == "2026-08-10"
-
-    # FSM state cleared: a follow-up plain message is not consumed as a date
-    session.calls.clear()
-    msg3 = make_message("hello")
-    await feed(dp, bot, storage, Update(update_id=3, message=msg3))
-    assert [p for m, p in session.calls if m == "sendMessage"] == []
-
-
-@pytest.mark.asyncio
-async def test_vacation_fsm_clear(dp, bot, session, storage):
-    await seed(storage)
-    await storage.update_member_vacation(-1001, 1, "2026-08-05")
-    msg = make_message("/vacation @b")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
-    session.calls.clear()
-
-    msg2 = make_message("снять")
-    await feed(dp, bot, storage, Update(update_id=2, message=msg2))
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "@b вернулся в ротацию" in sends[0]["text"]
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_until is None
-
-
-@pytest.mark.asyncio
-async def test_vacation_picker_opens_and_selects(dp, bot, session, storage):
-    await seed(storage)
-    msg = make_message("original")
-    cb = make_callback(msg, "daily:vac")
-    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
-
-    edits = [p for m, p in session.calls if m == "editMessageText"]
-    assert len(edits) == 1
-    assert "Кто уходит в отпуск?" in edits[0]["text"]
-    markup = edits[0]["reply_markup"]
-    flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
-    assert "daily:vac:1" in flat
-    session.calls.clear()
-
-    cb2 = make_callback(msg, "daily:vac:1")
-    await feed(dp, bot, storage, Update(update_id=2, callback_query=cb2))
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert len(sends) == 1
-    assert "До какой даты отпуск?" in sends[0]["text"]
-
-    session.calls.clear()
-    msg2 = make_message("05.08.2026", user_id=11)  # same user as the picker callback (FSM key)
-    await feed(dp, bot, storage, Update(update_id=3, message=msg2))
-    sends = [p for m, p in session.calls if m == "sendMessage"]
-    assert any("@b в отпуске до 05.08.2026" in s.get("text", "") for s in sends)
-    members = await storage.get_members(-1001)
-    assert members[1].vacation_until == "2026-08-05"
+    assert members[1].vacations == []
 
 
 @pytest.mark.asyncio
 async def test_setleader_then_vacationed_member_skipped_in_rotation(dp, bot, session, storage):
-    """End-to-end: after B goes on vacation, a subsequent manual leader
-    override of B must be rejected, and rotation skips B."""
+    """End-to-end: after B gets a vacation via the new storage API, a manual
+    leader override of B must be rejected, and rotation skips B."""
     await seed(storage, next_index=0)
-    msg = make_message("/vacation @b 2099-01-01")
-    await feed(dp, bot, storage, Update(update_id=1, message=msg))
+    await storage.add_vacation(-1001, 1, None, "2099-01-01")
 
-    session.calls.clear()
     msg2 = make_message("/setleader @b")
     await feed(dp, bot, storage, Update(update_id=2, message=msg2))
     sends = [p for m, p in session.calls if m == "sendMessage"]
@@ -1237,7 +1044,7 @@ async def test_menu_on_nonworkday(dp, bot, session, storage, monkeypatch):
     assert "@b" in text
     markup = edits[0]["reply_markup"]
     flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
-    assert flat == ["daily:team", "daily:time", "daily:who", "daily:help", "daily:lead", "daily:vac", "daily:costremind"]
+    assert flat == ["daily:team", "daily:time", "daily:who", "daily:help", "daily:lead", "daily:vacplan", "daily:costremind"]
 
 
 # ---- reset history ----
@@ -1390,7 +1197,7 @@ async def test_planned_vacations_view_shows_list(dp, bot, session, storage, monk
     future_start = "2026-09-10"
     future_end = "2026-09-15"
     await seed(storage)
-    await storage.update_member_vacation(-1001, 1, future_end, future_start)
+    await storage.add_vacation(-1001, 1, future_start, future_end)
 
     ref_date = datetime.date(2026, 8, 31)
     monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: ref_date)
@@ -1404,6 +1211,28 @@ async def test_planned_vacations_view_shows_list(dp, bot, session, storage, monk
     assert "\U0001f3d6" in text
     assert "@b" in text
     assert "с 10.09.2026 по 15.09.2026" in text
+
+
+@pytest.mark.asyncio
+async def test_planned_vacations_view_lists_all_members_sorted(dp, bot, session, storage, monkeypatch):
+    from ppbot.daily_ui import show_planned_vacations
+
+    await seed(storage)
+    await storage.add_vacation(-1001, 1, "2026-09-10", "2026-09-15")
+    await storage.add_vacation(-1001, 0, "2026-09-01", "2026-09-05")
+    await storage.add_vacation(-1001, 2, None, "2026-09-20")  # legacy: не «запланирован»
+
+    ref_date = datetime.date(2026, 8, 31)
+    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: ref_date)
+
+    msg = make_message("original").as_(bot)
+    await show_planned_vacations(msg, storage, TZ)
+
+    text = [p for m, p in session.calls if m == "sendMessage"][0]["text"]
+    a_idx = text.index("@a")
+    b_idx = text.index("@b")
+    assert a_idx < b_idx
+    assert "с 01.09.2026 по 05.09.2026" in text
 
 
 @pytest.mark.asyncio
@@ -1424,7 +1253,7 @@ async def test_planned_vacations_view_empty(dp, bot, session, storage, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_planned_vacations_back_returns_to_picker(dp, bot, session, storage, monkeypatch):
+async def test_planned_vacations_back_returns_to_menu(dp, bot, session, storage, monkeypatch):
     from ppbot.daily_ui import show_planned_vacations
 
     await seed(storage)
@@ -1439,53 +1268,12 @@ async def test_planned_vacations_back_returns_to_picker(dp, bot, session, storag
     assert len(sends) == 1
     markup = sends[0]["reply_markup"]
     flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
-    assert flat == ["daily:vac"]
+    assert flat == ["daily:menu"]
 
 
-# ---- T7: vacplan button in vacation picker ----
+# ---- vacplan button in main menu ----
 
 REF_DATE = datetime.date(2026, 8, 31)
-
-
-@pytest.mark.asyncio
-async def test_vacation_picker_shows_plan_button_with_future_vacation(dp, bot, session, storage, monkeypatch):
-    from ppbot import daily_handlers
-
-    monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: REF_DATE)
-    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: REF_DATE)
-
-    await seed(storage)
-    future_start = "2026-09-10"
-    future_end = "2026-09-15"
-    await storage.update_member_vacation(-1001, 1, future_end, future_start)
-
-    msg = make_message("original")
-    cb = make_callback(msg, "daily:vac")
-    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
-
-    edits = [p for m, p in session.calls if m == "editMessageText"]
-    assert len(edits) == 1
-    flat = [btn["callback_data"] for row in edits[0]["reply_markup"]["inline_keyboard"] for btn in row]
-    assert "daily:vacplan" in flat
-
-
-@pytest.mark.asyncio
-async def test_vacation_picker_no_plan_button_without_future(dp, bot, session, storage, monkeypatch):
-    from ppbot import daily_handlers
-
-    monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: REF_DATE)
-    monkeypatch.setattr("ppbot.daily_ui.today_in_tz", lambda tz: REF_DATE)
-
-    await seed(storage)
-
-    msg = make_message("original")
-    cb = make_callback(msg, "daily:vac")
-    await feed(dp, bot, storage, Update(update_id=1, callback_query=cb))
-
-    edits = [p for m, p in session.calls if m == "editMessageText"]
-    assert len(edits) == 1
-    flat = [btn["callback_data"] for row in edits[0]["reply_markup"]["inline_keyboard"] for btn in row]
-    assert "daily:vacplan" not in flat
 
 
 @pytest.mark.asyncio
@@ -1498,7 +1286,7 @@ async def test_vacplan_callback_shows_planned_vacations(dp, bot, session, storag
     await seed(storage)
     future_start = "2026-09-10"
     future_end = "2026-09-15"
-    await storage.update_member_vacation(-1001, 1, future_end, future_start)
+    await storage.add_vacation(-1001, 1, future_start, future_end)
 
     msg = make_message("original")
     cb = make_callback(msg, "daily:vacplan")
@@ -1525,7 +1313,7 @@ async def test_vacplan_command(dp, bot, session, storage, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vacplan_back_returns_to_picker(dp, bot, session, storage, monkeypatch):
+async def test_vacplan_callback_back_returns_to_menu(dp, bot, session, storage, monkeypatch):
     from ppbot import daily_handlers
 
     monkeypatch.setattr(daily_handlers, "today_in_tz", lambda tz: REF_DATE)
@@ -1541,4 +1329,4 @@ async def test_vacplan_back_returns_to_picker(dp, bot, session, storage, monkeyp
     assert len(edits) == 1
     markup = edits[0]["reply_markup"]
     flat = [btn["callback_data"] for row in markup["inline_keyboard"] for btn in row]
-    assert flat == ["daily:vac"]
+    assert flat == ["daily:menu"]

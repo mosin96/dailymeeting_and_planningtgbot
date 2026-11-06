@@ -271,6 +271,24 @@ def test_is_on_vacation_legacy_with_start_none():
     assert m.is_on_vacation("2026-08-06") is False
 
 
+def test_member_multiple_vacations_and_helpers():
+    from ppbot.daily import Vacation
+
+    m = member(0, "A")
+    m.vacations = [Vacation(start="2026-02-01", end="2026-02-10"), Vacation(start="2026-08-01", end="2026-08-05", id=7)]
+    assert m.is_on_vacation("2026-02-03") is True
+    assert m.is_on_vacation("2026-06-01") is False
+    assert m.is_on_vacation("2026-08-02") is True
+    active = m.active_vacation("2026-08-02")
+    assert active is not None and active.id == 7 and active.end == "2026-08-05"
+    assert m.active_vacation("2026-06-01") is None
+    nxt = m.next_vacation("2026-07-01")
+    assert nxt is not None and nxt.start == "2026-08-01"
+    assert m.next_vacation("2026-08-02") is None
+    assert m.is_unavailable("2026-08-02") is True
+    assert m.is_unavailable("2026-08-06") is False
+
+
 def test_is_unavailable_combines_skip_and_vacation():
     skipped = member(0, "A", skip_date="2026-08-03")
     assert skipped.is_unavailable("2026-08-03") is True
@@ -758,48 +776,71 @@ def test_daily_chat_to_dict_roundtrip_preserves_all_fields():
 
 # ---- T6: planned vacations (markup & filter logic) ----
 
-def test_is_planned_future_vacation_filters_correctly():
-    """A member qualifies as 'future vacation' only when vacation_start is
-    set AND strictly after today.  Legacy single-date (vacation_start=None)
-    or past start do NOT qualify."""
+def test_planned_vacation_filter_uses_vacation_list():
+    """A vacation qualifies as 'planned' only when start is set AND strictly
+    after today. Legacy periods (start=None) do NOT qualify."""
+    from ppbot.daily import Vacation
+
     today = "2026-08-15"
-    future = member(0, "Future", vacation_start="2026-08-20", vacation_until="2026-08-25")
-    past = member(1, "Past", vacation_start="2026-08-10", vacation_until="2026-08-12")
-    legacy = member(2, "Legacy", vacation_start=None, vacation_until="2026-08-20")
-    none = member(3, "None")
+    future = member(0, "Future")
+    future.vacations = [Vacation(start="2026-08-20", end="2026-08-25")]
+    past = member(1, "Past")
+    past.vacations = [Vacation(start="2026-08-10", end="2026-08-12")]
+    legacy = member(2, "Legacy")
+    legacy.vacations = [Vacation(start=None, end="2026-08-20")]
 
     def _is_future(m, ref):
-        return m.vacation_start is not None and m.vacation_start > ref
+        return any(v.start is not None and v.start > ref for v in m.vacations)
 
     assert _is_future(future, today) is True
     assert _is_future(past, today) is False
     assert _is_future(legacy, today) is False
-    assert _is_future(none, today) is False
 
 
-def test_build_member_picker_markup_vacplan_button():
-    from ppbot.daily_ui import PREFIX_VAC, PREFIX_VACPLAN, build_member_picker_markup
+def test_menu_markup_has_miniapp_button_without_url(monkeypatch):
+    from ppbot.daily_ui import build_menu_markup
 
-    members = [member(0, "A")]
-    # vacplan_button=True: button present BEFORE the back button
-    markup = build_member_picker_markup(members, PREFIX_VAC, vacplan_button=True)
-    flat = [(btn.text, btn.callback_data) for row in markup.inline_keyboard for btn in row]
-    texts = [t for t, _ in flat]
-    assert "Планируемые отпуска" in texts
-    vacplan_idx = texts.index("Планируемые отпуска")
-    back_idx = texts.index("🔙 Назад")
-    assert vacplan_idx < back_idx
-    assert flat[vacplan_idx] == ("Планируемые отпуска", PREFIX_VACPLAN)
-
-    # vacplan_button=False (default): no plan button
-    markup2 = build_member_picker_markup(members, PREFIX_VAC)
-    flat2 = [btn.callback_data for row in markup2.inline_keyboard for btn in row]
-    assert PREFIX_VACPLAN not in flat2
+    monkeypatch.delenv("PP_WEBAPP_PUBLIC_URL", raising=False)
+    markup = build_menu_markup(-1001)
+    flat = [
+        (btn.text, btn.callback_data, btn.url)
+        for row in markup.inline_keyboard
+        for btn in row
+    ]
+    # no mini-app button when PP_WEBAPP_PUBLIC_URL is unset
+    assert not any(t == "📅 Отпуска (мини-апп)" for t, _, _ in flat)
+    # planned vacations button is still there
+    assert ("Запланир. отпуска", "daily:vacplan", None) in flat
 
 
-def test_build_member_picker_markup_vacplan_empty_members():
-    from ppbot.daily_ui import PREFIX_VAC, PREFIX_VACPLAN, build_member_picker_markup
+def test_menu_markup_includes_miniapp_link_with_chat(monkeypatch):
+    from ppbot.daily_ui import build_menu_markup
 
-    markup = build_member_picker_markup([], PREFIX_VAC, vacplan_button=True)
-    flat = [(btn.text, btn.callback_data) for row in markup.inline_keyboard for btn in row]
-    assert flat == [("Планируемые отпуска", PREFIX_VACPLAN), ("🔙 Назад", "daily:menu")]
+    monkeypatch.setenv("PP_WEBAPP_PUBLIC_URL", "https://bot.example.com:8443/")
+    markup = build_menu_markup(-1001234567890)
+    urls = [
+        btn.url
+        for row in markup.inline_keyboard
+        for btn in row
+        if btn.text == "📅 Отпуска (мини-апп)"
+    ]
+    assert urls == ["https://bot.example.com:8443?chat=-1001234567890"]
+
+
+def test_build_member_picker_markup_no_longer_vacation_aware():
+    from ppbot.daily import DailyMember
+    from ppbot.daily_ui import PREFIX_LEAD, build_member_picker_markup
+
+    members = [
+        DailyMember(chat_id=-1001, position=0, user_id=1, username="A"),
+        DailyMember(chat_id=-1001, position=1, user_id=None, username="@testuser"),
+    ]
+    markup = build_member_picker_markup(members, PREFIX_LEAD)
+    flat = [
+        (btn.text, btn.callback_data)
+        for row in markup.inline_keyboard
+        for btn in row
+    ]
+    assert flat[0] == ("👑 A", "daily:lead:0")
+    assert flat[1] == ("👑 @testuser", "daily:lead:1")
+    assert flat[-1] == ("🔙 Назад", "daily:menu")

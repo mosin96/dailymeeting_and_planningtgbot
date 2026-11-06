@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Отпуска команды</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <button id="prev-month" class="nav-btn" aria-label="Предыдущий месяц">‹</button>
+  <div id="month-title" class="month-title">—</div>
+  <button id="next-month" class="nav-btn" aria-label="Следующий месяц">›</button>
+</header>
+
+<div id="members" class="members"></div>
+<div id="hint" class="hint">Открываем календарь…</div>
+
+<div class="calendar">
+  <div class="grid weekdays" id="weekdays"></div>
+  <div class="grid days" id="days"></div>
+</div>
+
+<div class="footer">
+  <button id="add-btn" class="primary" disabled>Добавить отпуск</button>
+</div>
+
+<div id="popup" class="popup hidden">
+  <div class="popup-card">
+    <div class="popup-title" id="popup-title"></div>
+    <div class="popup-text" id="popup-text"></div>
+    <div class="popup-actions">
+      <button id="popup-cancel" class="secondary">Отмена</button>
+      <button id="popup-ok" class="primary">ОК</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

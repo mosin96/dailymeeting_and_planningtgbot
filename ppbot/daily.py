@@ -16,6 +16,32 @@ SCHEDULE_DAYS = 14
 
 
 @dataclass
+class Vacation:
+    """Single vacation period of a team member (inclusive ISO dates).
+
+    `start` is None only for legacy vacations migrated from the old
+    one-vacation-per-member schema: "продолжается, действует до end".
+    """
+    start: Optional[str]
+    end: str
+    id: Optional[int] = None
+
+    def covers(self, today: str) -> bool:
+        if not self.end:
+            return False
+        if self.start is None:
+            return today <= self.end
+        return self.start <= today <= self.end
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "start": self.start, "end": self.end}
+
+    @classmethod
+    def from_dict(cls, dct: dict) -> "Vacation":
+        return cls(start=dct.get("start"), end=dct["end"], id=dct.get("id"))
+
+
+@dataclass
 class DailyMember:
     chat_id: int
     position: int
@@ -24,16 +50,37 @@ class DailyMember:
     skip_date: Optional[str] = None
     vacation_until: Optional[str] = None
     vacation_start: Optional[str] = None
+    vacations: List[Vacation] = field(default_factory=list)
+
+    def __post_init__(self):
+        # Legacy one-vacation-per-member constructor: fold the old fields
+        # into the vacations list (unless the same period already came from
+        # the daily_vacations table).
+        if self.vacation_until and not any(
+            v.end == self.vacation_until and v.start == self.vacation_start
+            for v in self.vacations
+        ):
+            self.vacations.append(Vacation(start=self.vacation_start, end=self.vacation_until))
 
     def is_skipped(self, today: str) -> bool:
         return self.skip_date == today
 
     def is_on_vacation(self, today: str) -> bool:
-        if not self.vacation_until:
-            return False
-        if self.vacation_start is None:
-            return today <= self.vacation_until
-        return self.vacation_start <= today <= self.vacation_until
+        return any(v.covers(today) for v in self.vacations)
+
+    def active_vacation(self, today: str) -> Optional[Vacation]:
+        """Vacation period covering `today`, if any."""
+        for v in self.vacations:
+            if v.covers(today):
+                return v
+        return None
+
+    def next_vacation(self, today: str) -> Optional[Vacation]:
+        """Earliest future vacation (start strictly after `today`), if any."""
+        planned = [v for v in self.vacations if v.start is not None and v.start > today]
+        if not planned:
+            return None
+        return min(planned, key=lambda v: (v.start, v.end))
 
     def is_unavailable(self, today: str) -> bool:
         return self.is_skipped(today) or self.is_on_vacation(today)
@@ -89,6 +136,7 @@ class DailyMember:
             "skip_date": self.skip_date,
             "vacation_until": self.vacation_until,
             "vacation_start": self.vacation_start,
+            "vacations": [v.to_dict() for v in self.vacations],
         }
 
     @classmethod
@@ -115,6 +163,7 @@ class DailyMember:
             skip_date=dct.get("skip_date"),
             vacation_until=dct.get("vacation_until"),
             vacation_start=dct.get("vacation_start"),
+            vacations=[Vacation.from_dict(v) for v in dct.get("vacations", [])],
         )
 
 
@@ -388,8 +437,9 @@ def member_list_text(members: List[DailyMember], today: str) -> str:
     lines = []
     for m in members:
         line = "{}. {}".format(m.position + 1, m.get_display_name(today))
-        if m.is_on_vacation(today):
-            line += " (в отпуске до {})".format(format_ru_date(m.vacation_until))
+        active = m.active_vacation(today)
+        if active is not None:
+            line += " (в отпуске до {})".format(format_ru_date(active.end))
         lines.append(line)
     return "\n".join(lines)
 

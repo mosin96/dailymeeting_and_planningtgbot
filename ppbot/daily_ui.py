@@ -4,6 +4,8 @@ from __future__ import annotations
 import datetime
 from typing import Dict, List, Optional
 
+import os
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from ppbot.daily import (
@@ -29,8 +31,6 @@ PREFIX_REMOVE_LIST = "daily:removelist"
 PREFIX_BACK = "daily:back"
 PREFIX_LEADER = "daily:lead"
 PREFIX_LEAD = "daily:lead:"
-PREFIX_VACATION = "daily:vac"
-PREFIX_VAC = "daily:vac:"
 PREFIX_VACPLAN = "daily:vacplan"
 PREFIX_COSTREMIND = "daily:costremind"
 PREFIX_COSTREMIND_SETTIME = "daily:costremind:settime"
@@ -60,26 +60,40 @@ def build_reminder_markup(leader: DailyMember, show_menu: bool = False) -> Inlin
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_menu_markup() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Состав команды", callback_data=PREFIX_TEAM),
-                InlineKeyboardButton(text="Время дейлика", callback_data=PREFIX_TIME),
-            ],
-            [
-                InlineKeyboardButton(text="Кто сегодня ведёт", callback_data=PREFIX_WHO),
-                InlineKeyboardButton(text="Справка", callback_data=PREFIX_HELP),
-            ],
-            [
-                InlineKeyboardButton(text="Выбрать ведущего", callback_data=PREFIX_LEADER),
-                InlineKeyboardButton(text="Отпуск", callback_data=PREFIX_VACATION),
-            ],
-            [
-                InlineKeyboardButton(text="Напомн. о трудозатратах", callback_data=PREFIX_COSTREMIND),
-            ],
-        ]
-    )
+def _webapp_chat_url(chat_id: int) -> Optional[str]:
+    """Public mini-app URL with the chat pinned as a query parameter.
+
+    None when PP_WEBAPP_PUBLIC_URL is not configured (the calendar button is
+    then omitted from the menus).
+    """
+    base = os.environ.get("PP_WEBAPP_PUBLIC_URL", "").strip().rstrip("/")
+    if not base:
+        return None
+    return "{}?chat={}".format(base, chat_id)
+
+
+def build_menu_markup(chat_id: int) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="Состав команды", callback_data=PREFIX_TEAM),
+            InlineKeyboardButton(text="Время дейлика", callback_data=PREFIX_TIME),
+        ],
+        [
+            InlineKeyboardButton(text="Кто сегодня ведёт", callback_data=PREFIX_WHO),
+            InlineKeyboardButton(text="Справка", callback_data=PREFIX_HELP),
+        ],
+        [
+            InlineKeyboardButton(text="Выбрать ведущего", callback_data=PREFIX_LEADER),
+            InlineKeyboardButton(text="Запланир. отпуска", callback_data=PREFIX_VACPLAN),
+        ],
+        [
+            InlineKeyboardButton(text="Напомн. о трудозатратах", callback_data=PREFIX_COSTREMIND),
+        ],
+    ]
+    webapp_url = _webapp_chat_url(chat_id)
+    if webapp_url:
+        rows.append([InlineKeyboardButton(text="📅 Отпуска (мини-апп)", url=webapp_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_cost_remind_settings_markup(enabled: bool, time: str) -> InlineKeyboardMarkup:
@@ -94,15 +108,12 @@ def build_cost_remind_settings_markup(enabled: bool, time: str) -> InlineKeyboar
 
 
 def build_member_picker_markup(
-    members: List[DailyMember], prefix: str, *, vacplan_button: bool = False,
+    members: List[DailyMember], prefix: str,
 ) -> InlineKeyboardMarkup:
     """One button per member carrying its position, plus a back button.
 
-    `prefix` is the callback prefix (e.g. PREFIX_LEAD or PREFIX_VAC); the
-    payload carries the member POSITION (stable even for user_id=None members).
-
-    When *vacplan_button* is True, a "Планируемые отпуска" row is inserted
-    before the back button (only meaningful for the vacation picker).
+    `prefix` is the callback prefix (e.g. PREFIX_LEAD); the payload carries
+    the member POSITION (stable even for user_id=None members).
     """
     rows = [
         [
@@ -113,8 +124,6 @@ def build_member_picker_markup(
         ]
         for m in members
     ]
-    if vacplan_button:
-        rows.append([InlineKeyboardButton(text="Планируемые отпуска", callback_data=PREFIX_VACPLAN)])
     rows.append([InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_MENU)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -177,7 +186,7 @@ async def show_menu(message: Message, daily: DailyRegistry, tz, workdays=None, e
     ).format(time=chat.daily_time, count=count_str)
     if vacationers:
         parts = ", ".join(
-            "{} (до {})".format(m.plain_name, format_ru_date(m.vacation_until))
+            "{} (до {})".format(m.plain_name, format_ru_date(m.active_vacation(str(today)).end))
             for m in vacationers
         )
         text += "В отпуске: {}\n".format(parts)
@@ -195,9 +204,9 @@ async def show_menu(message: Message, daily: DailyRegistry, tz, workdays=None, e
         if leader is None:
             text += "\nВсе пропущены сегодня"
     if edit:
-        await message.edit_text(text, reply_markup=build_menu_markup())
+        await message.edit_text(text, reply_markup=build_menu_markup(chat_id))
     else:
-        await message.answer(text, reply_markup=build_menu_markup())
+        await message.answer(text, reply_markup=build_menu_markup(chat_id))
 
 
 async def show_team(message: Message, daily: DailyRegistry, tz, edit: bool = False) -> None:
@@ -234,22 +243,24 @@ async def show_planned_vacations(message: Message, daily: DailyRegistry, tz, edi
     chat_id = message.chat.id
     members = await daily.get_members(chat_id)
     today_s = str(today_in_tz(tz))
-    future = sorted(
-        [m for m in members if m.vacation_start is not None and m.vacation_start > today_s],
-        key=lambda m: m.vacation_start,
-    )
-    if future:
+    entries = []
+    for m in members:
+        for v in m.vacations:
+            if v.start is not None and v.start > today_s:
+                entries.append((v.start, v.end, m))
+    entries.sort(key=lambda item: (item[0], item[1], item[2].position))
+    if entries:
         lines = [
             "\U0001f3d6 {}: с {} по {}".format(
-                m.get_display_name(), format_ru_date(m.vacation_start), format_ru_date(m.vacation_until),
+                m.get_display_name(), format_ru_date(start), format_ru_date(end),
             )
-            for m in future
+            for start, end, m in entries
         ]
         text = "\n".join(lines)
     else:
         text = "Нет запланированных отпусков"
     markup = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_VACATION)]]
+        inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data=PREFIX_MENU)]]
     )
     if edit:
         await message.edit_text(text, reply_markup=markup)
@@ -292,7 +303,7 @@ async def who_reply(message: Message, daily: DailyRegistry, tz, workdays=None, e
     vacationers = [m for m in members if m.is_on_vacation(today_s)]
     if vacationers:
         parts = ", ".join(
-            "{} (до {})".format(m.plain_name, format_ru_date(m.vacation_until))
+            "{} (до {})".format(m.plain_name, format_ru_date(m.active_vacation(today_s).end))
             for m in vacationers
         )
         text += "\nВ отпуске: {}".format(parts)
@@ -321,7 +332,7 @@ GREETING_HELP = (
     "/who — кто сегодня ведёт\n"
     "/substitute — подменить ведущего\n"
     "/setleader @ник — назначить ведущего на сегодня\n"
-    "/vacation @ник ДД.ММ.ГГГГ-ДД.ММ.ГГГГ — отпуск с по («снять» — вернуть)\n"
+    "📅 Отпуска — через мини-апп (кнопка «Отпуска» в меню /daily)\n"
     "/costremind — напоминания о списании трудозатрат (вкл/выкл, время)\n"
     "/vacplan — запланированные отпуска\n"
     "/reset — сбросить историю бота для чата (двойное подтверждение)\n"

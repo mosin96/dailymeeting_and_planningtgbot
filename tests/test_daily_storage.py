@@ -130,99 +130,236 @@ class TestMembers:
         assert len(await registry.get_members(2)) == 1
 
 
-class TestVacation:
-    async def test_vacation_column_exists_on_fresh_db(self, registry):
-        async with registry._db.execute("PRAGMA table_info(daily_members)") as cursor:
-            cols = [row[1] for row in await cursor.fetchall()]
-        assert "vacation_until" in cols
+def _vac(m, i):
+    return m.vacations[i]
 
-    async def test_add_get_vacation_roundtrip(self, registry):
-        await registry.add_member(
-            member(1, 0, "Иван", user_id=100, vacation_until="2026-08-05")
-        )
-        members = await registry.get_members(1)
-        assert members[0].vacation_until == "2026-08-05"
 
-    async def test_update_member_vacation_sets_and_clears(self, registry):
+class TestVacationsV3:
+    """v3 model: many vacations per member in the daily_vacations table."""
+
+    async def test_vacations_table_exists_on_fresh_db(self, registry):
+        async with registry._db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='daily_vacations'"
+        ) as cursor:
+            assert (await cursor.fetchone()) is not None
+
+    async def test_legacy_columns_are_nulled_on_fresh_db(self, registry):
+        """Fresh DB: the legacy daily_members vacation columns are created but unused."""
         await registry.add_member(member(1, 0, "Иван", user_id=100))
-        await registry.update_member_vacation(1, 0, "2026-08-05")
         members = await registry.get_members(1)
-        assert members[0].vacation_until == "2026-08-05"
-        await registry.update_member_vacation(1, 0, None)
-        members = await registry.get_members(1)
-        assert members[0].vacation_until is None
+        assert members[0].vacations == []
+        assert members[0].is_on_vacation("2026-08-05") is False
 
-    async def test_update_member_vacation_by_position_works_for_username_member(self, registry):
-        """Members added by @username have user_id=None; update must key on position."""
-        await registry.add_member(member(1, 0, "testuser", username="testuser"))
-        await registry.update_member_vacation(1, 0, "2026-08-05")
-        members = await registry.get_members(1)
-        assert members[0].vacation_until == "2026-08-05"
-
-    async def test_update_member_vacation_unknown_position_is_noop(self, registry):
+    async def test_add_vacation_roundtrip(self, registry):
         await registry.add_member(member(1, 0, "Иван", user_id=100))
-        await registry.update_member_vacation(1, 5, "2026-08-05")
+        v = await registry.add_vacation(1, 0, "2026-08-01", "2026-08-05")
+        assert v is not None and v.id is not None
         members = await registry.get_members(1)
-        assert members[0].vacation_until is None
+        assert len(members[0].vacations) == 1
+        assert members[0].vacations[0].start == "2026-08-01"
+        assert members[0].vacations[0].end == "2026-08-05"
+        assert members[0].is_on_vacation("2026-08-03") is True
+        assert members[0].is_on_vacation("2026-07-31") is False
+        assert members[0].is_on_vacation("2026-08-06") is False
 
-    async def test_replace_members_preserves_vacation(self, registry):
-        await registry.add_member(member(1, 0, "A", user_id=1, vacation_until="2026-08-05"))
+    async def test_multiple_vacations_per_member(self, registry):
+        await registry.add_member(member(1, 0, "Иван", user_id=100))
+        await registry.add_vacation(1, 0, "2026-02-01", "2026-02-10")
+        await registry.add_vacation(1, 0, "2026-08-01", "2026-08-05")
+        members = await registry.get_members(1)
+        assert [v.start for v in members[0].vacations] == ["2026-02-01", "2026-08-01"]
+        assert members[0].is_on_vacation("2026-02-03") is True
+        assert members[0].is_on_vacation("2026-05-01") is False
+        assert members[0].is_on_vacation("2026-08-03") is True
+
+    async def test_vacations_isolated_per_chat(self, registry):
+        await registry.add_member(member(1, 0, "A", user_id=1))
+        await registry.add_member(member(2, 0, "B", user_id=2))
+        await registry.add_vacation(1, 0, "2026-08-01", "2026-08-05")
+        members = await registry.get_members(2)
+        assert members[0].vacations == []
+
+    async def test_add_vacation_unknown_position_is_noop(self, registry):
+        assert await registry.add_vacation(1, 5, "2026-08-01", "2026-08-05") is None
+
+    async def test_delete_vacation_by_id(self, registry):
+        await registry.add_member(member(1, 0, "Иван", user_id=100))
+        v1 = await registry.add_vacation(1, 0, "2026-08-01", "2026-08-05")
+        v2 = await registry.add_vacation(1, 0, "2026-02-01", "2026-02-10")
+        assert await registry.delete_vacation(1, v1.id) is True
+        members = await registry.get_members(1)
+        assert [v.end for v in members[0].vacations] == ["2026-02-10"]
+        assert await registry.delete_vacation(1, v2.id) is True
+        members = await registry.get_members(1)
+        assert members[0].vacations == []
+        # deleting again (or another chat's id) is a False
+        assert await registry.delete_vacation(1, v1.id) is False
+
+    async def test_delete_other_chat_vacation_rejected(self, registry):
+        await registry.add_member(member(1, 0, "A", user_id=1))
+        await registry.add_member(member(2, 0, "B", user_id=2))
+        v = await registry.add_vacation(1, 0, "2026-08-01", "2026-08-05")
+        assert await registry.delete_vacation(2, v.id) is False
+        assert len(await registry.get_vacations(1)) == 1
+
+    async def test_get_vacations_by_position(self, registry):
+        await registry.add_member(member(1, 0, "A", user_id=1))
         await registry.add_member(member(1, 1, "B", user_id=2))
+        await registry.add_vacation(1, 0, "2026-08-01", "2026-08-05")
+        v_b = await registry.add_vacation(1, 1, "2026-09-01", "2026-09-05")
+        stored = await registry.get_vacations(1, position=1)
+        assert len(stored) == 1
+        assert stored[0].vacation.id == v_b.id
+
+    async def test_legacy_null_start_vacation_semantics(self, registry):
+        """Migrated legacy rows have start_date=NULL: 'продолжается до end'."""
+        await registry.add_member(member(1, 0, "Иван", user_id=100))
+        await registry._db.execute(
+            "INSERT INTO daily_vacations (chat_id, position, start_date, end_date) VALUES (1, 0, NULL, '2026-08-05')"
+        )
+        await registry._db.commit()
+        members = await registry.get_members(1)
+        assert members[0].is_on_vacation("2026-08-05") is True
+        assert members[0].is_on_vacation("2026-08-06") is False
+        # 'Жив' до конца сегодняшнего дня: lower-bound does not apply
+        assert members[0].is_on_vacation("2020-01-01") is True
+        assert members[0].next_vacation("2026-01-01") is None
+
+    async def test_remove_member_shifts_vacation_positions(self, registry):
+        await registry.add_member(member(1, 0, "A", user_id=1))
+        await registry.add_member(member(1, 1, "B", user_id=2))
+        await registry.add_member(member(1, 2, "C", user_id=3))
+        await registry.add_vacation(1, 1, "2026-08-01", "2026-08-05")
+        await registry.add_vacation(1, 2, "2026-09-01", "2026-09-05")
+        await registry.remove_member(1, 0)
+        members = await registry.get_members(1)
+        assert [m.position for m in members] == [0, 1]
+        b = members[0]
+        c = members[1]
+        assert [v.start for v in b.vacations] == ["2026-08-01"]
+        assert [v.start for v in c.vacations] == ["2026-09-01"]
+
+    async def test_delete_chat_cleans_vacations(self, registry):
+        await registry.add_member(member(1, 0, "A", user_id=1))
+        await registry.add_vacation(1, 0, "2026-08-01", "2026-08-05")
+        await registry.delete_chat(1)
+        assert await registry.get_vacations(1) == []
+
+    async def test_replace_members_keeps_vacations_of_unchanged_positions(self, registry):
+        await registry.add_member(member(1, 0, "A", user_id=1))
+        await registry.add_member(member(1, 1, "B", user_id=2))
+        await registry.add_vacation(1, 1, "2026-08-01", "2026-08-05")
         await registry.replace_members(
             1,
-            [
-                member(1, 0, "A", user_id=1, vacation_until="2026-08-06"),
-                member(1, 1, "B", user_id=2),
-            ],
+            [member(1, 0, "A", user_id=1, skip_date="2026-08-05"), member(1, 1, "B", user_id=2)],
         )
         members = await registry.get_members(1)
-        assert members[0].vacation_until == "2026-08-06"
-        assert members[1].vacation_until is None
+        assert members[0].skip_date == "2026-08-05"
+        assert [v.start for v in members[1].vacations] == ["2026-08-01"]
 
 
-class TestVacationStart:
-    async def test_vacation_start_column_exists_on_fresh_db(self, registry):
-        """Given a freshly initialized registry, daily_members has vacation_start."""
-        async with registry._db.execute("PRAGMA table_info(daily_members)") as cursor:
-            cols = [row[1] for row in await cursor.fetchall()]
-        assert "vacation_start" in cols
+class TestVacationMigration:
+    """Old DBs store one vacation per member as daily_members columns; on
+    init_db the values are moved into daily_vacations and the columns are
+    cleared. Re-running the migration must be a no-op."""
 
-    async def test_add_get_vacation_start_roundtrip(self, registry):
-        await registry.add_member(
-            member(1, 0, "Иван", user_id=100, vacation_until="2026-08-10", vacation_start="2026-08-01")
+    async def _make_legacy_db(self, tmp_path):
+        """Create a DB that looks like it was written by the old bot: rows in
+        daily_members with non-NULL vacation_until / vacation_start and no
+        daily_vacations rows."""
+        db = tmp_path / "legacy.db"
+        reg = DailyRegistry()
+        await reg.init_db(str(db))
+        await reg.replace_members(1, [member(1, 0, "Иван", user_id=100), member(1, 1, "Пётр", user_id=101)])
+        await reg._db.execute(
+            "UPDATE daily_members SET vacation_until = '2026-08-05', vacation_start = '2026-08-01' "
+            "WHERE chat_id = 1 AND position = 0"
         )
-        members = await registry.get_members(1)
-        assert members[0].vacation_until == "2026-08-10"
-        assert members[0].vacation_start == "2026-08-01"
-
-    async def test_update_member_vacation_sets_both_fields(self, registry):
-        await registry.add_member(member(1, 0, "Иван", user_id=100))
-        await registry.update_member_vacation(1, 0, "2026-08-10", "2026-08-01")
-        members = await registry.get_members(1)
-        assert members[0].vacation_until == "2026-08-10"
-        assert members[0].vacation_start == "2026-08-01"
-
-    async def test_update_member_vacation_clears_both_fields(self, registry):
-        await registry.add_member(
-            member(1, 0, "Иван", user_id=100, vacation_until="2026-08-10", vacation_start="2026-08-01")
+        await reg._db.execute(
+            "UPDATE daily_members SET vacation_until = '2026-02-10', vacation_start = NULL "
+            "WHERE chat_id = 1 AND position = 1"
         )
-        await registry.update_member_vacation(1, 0, None, None)
-        members = await registry.get_members(1)
-        assert members[0].vacation_until is None
-        assert members[0].vacation_start is None
+        await reg._db.commit()
+        await reg.close()
+        return db
 
-    async def test_update_member_vacation_three_args_backward_compat(self, registry):
-        await registry.add_member(member(1, 0, "Иван", user_id=100))
-        await registry.update_member_vacation(1, 0, "2026-08-05")
-        members = await registry.get_members(1)
-        assert members[0].vacation_until == "2026-08-05"
-        assert members[0].vacation_start is None
+    async def test_migration_moves_rows_and_clears_columns(self, tmp_path):
+        db = await self._make_legacy_db(tmp_path)
+        reg2 = DailyRegistry()
+        await reg2.init_db(str(db))
+        members = await reg2.get_members(1)
+        ivan = members[0]
+        petr = members[1]
+        assert [(v.start, v.end) for v in ivan.vacations] == [("2026-08-01", "2026-08-05")]
+        # legacy row without start: NULL start is preserved
+        assert [(v.start, v.end) for v in petr.vacations] == [(None, "2026-02-10")]
+        assert petr.is_on_vacation("2026-02-01") is True
+        assert petr.is_on_vacation("2026-02-11") is False
+        async with reg2._db.execute(
+            "SELECT COUNT(*) FROM daily_members WHERE vacation_until IS NOT NULL OR vacation_start IS NOT NULL"
+        ) as cursor:
+            count = (await cursor.fetchone())[0]
+        assert count == 0
+        await reg2.close()
 
-    async def test_replace_members_preserves_vacation_start(self, registry):
-        await registry.add_member(member(1, 0, "A", user_id=1, vacation_start="2026-08-01"))
-        await registry.replace_members(1, [member(1, 0, "A", user_id=1, vacation_start="2026-08-02")])
-        members = await registry.get_members(1)
-        assert members[0].vacation_start == "2026-08-02"
+    async def test_migration_from_original_schema(self, tmp_path):
+        """A DB written by the very first bot version: no daily_vacations
+        table and no vacation_start column at all."""
+        import sqlite3
+
+        db = tmp_path / "v1.db"
+        con = sqlite3.connect(db)
+        con.executescript(
+            """
+            CREATE TABLE daily_chats (
+                chat_id INTEGER PRIMARY KEY,
+                daily_time TEXT NOT NULL DEFAULT '10:00',
+                next_index INTEGER NOT NULL DEFAULT 0,
+                last_reminder_date TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE daily_members (
+                chat_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                user_id INTEGER,
+                username TEXT,
+                first_name TEXT NOT NULL,
+                skip_date TEXT,
+                vacation_until TEXT,
+                PRIMARY KEY (chat_id, position)
+            );
+            CREATE TABLE daily_meta (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE daily_schedule (
+                chat_id INTEGER NOT NULL, date TEXT NOT NULL,
+                position INTEGER, PRIMARY KEY (chat_id, date)
+            );
+            INSERT INTO daily_chats (chat_id, next_index) VALUES (1, 0);
+            INSERT INTO daily_members VALUES (1, 0, 100, 'Иван', 'Иван', NULL, '2026-08-05');
+            INSERT INTO daily_members VALUES (1, 1, 101, 'Пётр', 'Пётр', NULL, '2026-08-10');
+            UPDATE daily_members SET vacation_until = NULL WHERE position = 1;
+            """
+        )
+        con.commit()
+        con.close()
+
+        reg = DailyRegistry()
+        await reg.init_db(str(db))
+        members = await reg.get_members(1)
+        assert [(v.start, v.end) for v in members[0].vacations] == [(None, "2026-08-05")]
+        assert members[1].vacations == []
+        assert members[0].is_on_vacation("2026-08-05") is True
+        assert members[0].is_on_vacation("2026-08-06") is False
+        await reg.close()
+
+    async def test_migration_is_idempotent(self, tmp_path):
+        db = await self._make_legacy_db(tmp_path)
+        reg2 = DailyRegistry()
+        await reg2.init_db(str(db))
+        await reg2.init_db(str(db))  # second run must not duplicate rows
+        members = await reg2.get_members(1)
+        assert len(members[0].vacations) == 1
+        assert len(members[1].vacations) == 1
+        await reg2.close()
 
 
 class TestCostReminderColumns:
@@ -383,7 +520,7 @@ class TestEnsureScheduleExtension:
         await registry.upsert_chat(DailyChat(chat_id=1, daily_time="10:00", next_index=2))
         await seed(registry)
         for i in range(3):
-            await registry.update_member_vacation(1, i, "2027-01-01")
+            await registry.add_vacation(1, i, None, "2027-01-01")
         members = await registry.get_members(1)
         chat = await registry.get_chat(1)
         await registry.ensure_schedule(chat, members, datetime.date(2026, 8, 3), workdays=mon_fri)

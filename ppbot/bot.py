@@ -15,6 +15,10 @@ from ppbot.utils import init_logging
 TOKEN = os.environ["PP_BOT_TOKEN"]
 DB_PATH = os.environ.get("PP_BOT_DB_PATH", os.path.expanduser("~/.tg_pp_bot.db"))
 TZ_NAME = os.environ.get("PP_BOT_TZ", "Europe/Moscow")
+WEBAPP_PORT = int(os.environ.get("PP_WEBAPP_PORT", "8443"))
+WEBAPP_CERT = os.environ.get("PP_WEBAPP_CERT", "")
+WEBAPP_KEY = os.environ.get("PP_WEBAPP_KEY", "")
+WEBAPP_PUBLIC_URL = os.environ.get("PP_WEBAPP_PUBLIC_URL", "")
 
 try:
     TZ = ZoneInfo(TZ_NAME)
@@ -32,7 +36,7 @@ GREETING = """🤖 Дейлик-бот
 /who — кто сегодня ведёт
 /substitute — подменить ведущего
 /setleader @ник — ведущий сегодня
-/vacation @ник ДД.ММ.ГГГГ — отпуск («снять» — вернуть)
+📅 Отпуска — через мини-апп (кнопка «Отпуска» в меню /daily)
 /costremind — напоминания о списании трудозатрат
 /vacplan — запланированные отпуска
 /reset — сброс истории бота для чата (двойное подтверждение)
@@ -48,7 +52,6 @@ COMMANDS = [
     ("who", "Кто сегодня ведёт дейлик"),
     ("substitute", "Подменить ведущего дейлика"),
     ("setleader", "Выбрать ведущего сегодня"),
-    ("vacation", "Отпуск участника (до ДД.ММ.ГГГГ)"),
     ("costremind", "Напоминания о трудозатратах"),
     ("vacplan", "Запланированные отпуска"),
     ("reset", "Сбросить историю бота для чата"),
@@ -92,6 +95,7 @@ def main():
 
         from ppbot.scheduler import migrate_schedule_model, reminder_loop
         from ppbot.workdays import WorkdayClient
+        from ppbot.webapp import start_webapp
 
         http_session = aiohttp.ClientSession()
         workdays = WorkdayClient(session=http_session)
@@ -101,12 +105,27 @@ def main():
         await bot.set_my_commands(
             [BotCommand(command=cmd, description=desc) for cmd, desc in COMMANDS]
         )
+        # Mini-app HTTP(S) server: runs in the same loop as polling and the
+        # reminder cycle. Started as a task so a port/cert problem degrades
+        # to a warning instead of killing the bot.
+        webapp_task = asyncio.ensure_future(
+            start_webapp(
+                daily,
+                TZ,
+                TOKEN,
+                workdays=workdays,
+                port=WEBAPP_PORT,
+                cert_file=WEBAPP_CERT,
+                key_file=WEBAPP_KEY,
+            )
+        )
         try:
             await asyncio.gather(
                 dp.start_polling(bot, storage=storage, daily=daily, tz=TZ, workdays=workdays),
                 reminder_loop(bot, daily, workdays, TZ),
             )
         finally:
+            webapp_task.cancel()
             await http_session.close()
 
     try:
