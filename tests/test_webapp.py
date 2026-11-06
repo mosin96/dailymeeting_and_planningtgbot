@@ -66,6 +66,24 @@ async def test_static_files_exist():
     assert {"index.html", "app.js", "style.css"} <= names
     index = open(STATIC_DIR + "/index.html", encoding="utf-8").read()
     assert "app.js" in index
+    # member picker is a dropdown with multi-select + a "Я" shortcut
+    assert 'id="members-toggle"' in index
+    assert 'id="members-panel"' in index
+    assert 'id="members-list"' in index
+    assert 'id="me-btn"' in index
+    assert ">Я<" in index
+
+
+@pytest.mark.asyncio
+async def test_app_js_implements_multiselect():
+    from ppbot.webapp import STATIC_DIR
+
+    code = open(STATIC_DIR + "/app.js", encoding="utf-8").read()
+    assert "state.selected" in code
+    assert "toggleMember" in code
+    assert "selectOnly" in code
+    assert "start_param" in code
+    assert "t.me" not in code  # deep links are built server-side
 
 
 @pytest.mark.asyncio

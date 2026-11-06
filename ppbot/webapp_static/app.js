@@ -36,7 +36,9 @@
   var state = {
     today: null,          // ISO string from the server
     members: [],
-    filter: null,         // null = "Все", otherwise member position
+    me: null,             // position of the member who opened the app
+    selected: [],         // positions shown on the calendar (multi-select)
+    selectionInitialized: false,
     viewYear: 2016,
     viewMonth: 0,         // 0..11
     selStart: null,       // ISO string
@@ -86,6 +88,14 @@
   function setHint(msg) { $("hint").textContent = msg; }
   function setHintHtml(html) { $("hint").innerHTML = html; }
 
+  function defaultHint() {
+    if (state.selected.length === 1) {
+      return "Показаны отпуска: " + memberName(state.selected[0]) + ". Нажмите на день, чтобы добавить отпуск.";
+    }
+    if (state.selected.length === 0) return "Выберите участников в списке сверху.";
+    return "Показаны отпуска " + state.selected.length + " участников. Для добавления выберите одного (или нажмите «Я»).";
+  }
+
   function loadState(hintAfter) {
     setHint("Загрузка…");
     fetch("/api/state?chat=" + encodeURIComponent(chatId), {
@@ -100,6 +110,19 @@
       .then(function (data) {
         state.today = data.today;
         state.members = data.members;
+        state.me = data.me && typeof data.me.position === "number" ? data.me.position : null;
+        if (!state.selectionInitialized) {
+          // Default: the member who opened the app is selected.
+          state.selectionInitialized = true;
+          state.selected = state.me !== null
+            ? [state.me]
+            : state.members.map(function (m) { return m.position; });
+        }
+        // Drop positions of members removed from the roster.
+        state.selected = state.selected.filter(function (pos) {
+          return memberByPosition(pos) !== null;
+        });
+        if (state.selected.length === 0 && state.me !== null) state.selected = [state.me];
         var t = parseIso(data.today);
         state.viewYear = t.getFullYear();
         state.viewMonth = t.getMonth();
@@ -107,6 +130,7 @@
         renderCalendar();
         updateUi();
         if (hintAfter) setHint(hintAfter);
+        else if (!state.selStart) setHint(defaultHint());
       })
       .catch(function (err) { setHint(err.message || "Не удалось загрузить данные"); });
   }
@@ -132,34 +156,85 @@
     });
   }
 
-  /* ---------- members chips ---------- */
+  /* ---------- members dropdown (multi-select) ---------- */
+
+  function isSelected(pos) {
+    return state.selected.indexOf(pos) !== -1;
+  }
 
   function renderMembers() {
-    var box = $("members");
-    box.innerHTML = "";
-    box.appendChild(makeChip(null, "Все", state.filter === null));
+    var label = $("members-label");
+    var dot = $("members-dot");
+    if (state.selected.length === 0) {
+      label.textContent = "Никто не выбран";
+      dot.style.background = "var(--muted)";
+    } else if (state.selected.length === state.members.length) {
+      label.textContent = "Все участники (" + state.members.length + ")";
+      dot.style.background = "var(--muted)";
+    } else if (state.selected.length === 1) {
+      label.textContent = memberName(state.selected[0]);
+      dot.style.background = colorOf(state.selected[0]);
+    } else {
+      label.textContent = memberName(state.selected[0]) + " +" + (state.selected.length - 1);
+      dot.style.background = "var(--muted)";
+    }
+    $("me-btn").disabled = state.me === null;
+
+    var list = $("members-list");
+    list.innerHTML = "";
     state.members.forEach(function (m) {
-      box.appendChild(makeChip(m, m.name, state.filter === m.position));
+      var selected = isSelected(m.position);
+      var row = document.createElement("button");
+      row.className = "member-row" + (selected ? " selected" : "");
+      row.dataset.position = m.position;
+
+      var check = document.createElement("span");
+      check.className = "check";
+      check.textContent = selected ? "✓" : "";
+
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = colorOf(m.position);
+
+      var name = document.createElement("span");
+      name.className = "name";
+      name.textContent = m.position === state.me ? m.name + " (я)" : m.name;
+
+      row.appendChild(check);
+      row.appendChild(dot);
+      row.appendChild(name);
+      row.addEventListener("click", function () { toggleMember(m.position); });
+      list.appendChild(row);
     });
   }
 
-  function makeChip(member, label, selected) {
-    var el = document.createElement("button");
-    el.className = "chip" + (selected ? " selected" : "");
-    var dot = document.createElement("span");
-    dot.className = "dot";
-    dot.style.background = member ? colorOf(member.position) : "var(--muted)";
-    el.appendChild(dot);
-    el.appendChild(document.createTextNode(label));
-    el.addEventListener("click", function () {
-      state.filter = member ? member.position : null;
-      state.selStart = null;
-      state.selEnd = null;
-      renderMembers();
-      renderCalendar();
-      updateUi();
-    });
-    return el;
+  function toggleMember(pos) {
+    var i = state.selected.indexOf(pos);
+    if (i === -1) state.selected.push(pos);
+    else state.selected.splice(i, 1);
+    state.selStart = null;
+    state.selEnd = null;
+    renderMembers();
+    renderCalendar();
+    updateUi();
+    setHint(defaultHint());
+  }
+
+  function selectOnly(pos) {
+    if (pos === null) return;
+    state.selected = [pos];
+    state.selStart = null;
+    state.selEnd = null;
+    renderMembers();
+    renderCalendar();
+    updateUi();
+    setHint(defaultHint());
+  }
+
+  function setMembersPanel(open) {
+    $("members-panel").classList.toggle("hidden", !open);
+    $("members-toggle").setAttribute("aria-expanded", open ? "true" : "false");
+    $("members-toggle").querySelector(".caret").textContent = open ? "▴" : "▾";
   }
 
   /* ---------- calendar ---------- */
@@ -212,7 +287,7 @@
     var marks = document.createElement("div");
     marks.className = "marks";
     state.members.forEach(function (m) {
-      if (state.filter !== null && m.position !== state.filter) return;
+      if (!isSelected(m.position)) return;
       m.vacations.forEach(function (v) {
         var from = v.start === null ? "0000-01-01" : v.start;  // legacy: ongoing
         var to = v.end;
@@ -241,15 +316,16 @@
     }
     if (iso < today) { setHint("Прошедшие дни изменить нельзя"); return; }
 
-    if (state.filter === null) {
-      setHint("Выберите участника сверху, чтобы добавить отпуск");
+    if (state.selected.length !== 1) {
+      setHint("Чтобы добавить отпуск, выберите ровно одного участника (или нажмите «Я»)");
+      setMembersPanel(true);
       return;
     }
 
     if (!state.selStart) {
       state.selStart = iso;
       state.selEnd = null;
-      setHint("Начало отпуска: " + ruDate(iso) + ". Выберите последний день.");
+      setHint("Начало отпуска " + memberName(state.selected[0]) + ": " + ruDate(iso) + ". Выберите последний день.");
       renderCalendar();
       updateUi();
       return;
@@ -258,14 +334,14 @@
     if (iso < state.selStart) {  // restarted selection
       state.selStart = iso;
       state.selEnd = null;
-      setHint("Начало отпуска: " + ruDate(iso) + ". Выберите последний день.");
+      setHint("Начало отпуска " + memberName(state.selected[0]) + ": " + ruDate(iso) + ". Выберите последний день.");
       renderCalendar();
       updateUi();
       return;
     }
 
     state.selEnd = iso;
-    var name = memberName(state.filter);
+    var name = memberName(state.selected[0]);
     showPopup(
       "Добавить отпуск",
       name + ": с " + ruDate(state.selStart) + " по " + ruDate(state.selEnd),
@@ -276,9 +352,14 @@
   }
 
   function confirmAdd() {
+    var target = state.selected.length === 1 ? state.selected[0] : null;
+    if (target === null || !state.selStart) {
+      setHint("Выберите одного участника и даты отпуска");
+      return;
+    }
     var payload = {
       chat: Number(chatId),
-      position: state.filter,
+      position: target,
       start: state.selStart,
       end: state.selEnd === null ? state.selStart : state.selEnd
     };
@@ -341,8 +422,8 @@
   /* ---------- toolbar ---------- */
 
   function updateUi() {
-    var memberChip = state.filter !== null;
-    $("add-btn").disabled = !(memberChip && state.selStart);
+    var single = state.selected.length === 1;
+    $("add-btn").disabled = !(single && state.selStart);
     if (state.selStart) {
       setHintHtml("Выбрано: с " + ruDate(state.selStart) + (state.selEnd ? " по " + ruDate(state.selEnd) : ""));
     }
@@ -366,8 +447,8 @@
   });
 
   $("add-btn").addEventListener("click", function () {
-    if (state.selStart && state.filter !== null) {
-      var name = memberName(state.filter);
+    if (state.selStart && state.selected.length === 1) {
+      var name = memberName(state.selected[0]);
       showPopup(
         "Добавить отпуск",
         name + ": с " + ruDate(state.selStart) + " по " + ruDate(state.selEnd === null ? state.selStart : state.selEnd),
@@ -376,6 +457,25 @@
         false
       );
     }
+  });
+
+  $("members-toggle").addEventListener("click", function () {
+    setMembersPanel($("members-panel").classList.contains("hidden"));
+  });
+  $("members-done").addEventListener("click", function () { setMembersPanel(false); });
+  $("members-all").addEventListener("click", function () {
+    state.selected = state.members.map(function (m) { return m.position; });
+    state.selStart = null;
+    state.selEnd = null;
+    renderMembers();
+    renderCalendar();
+    updateUi();
+    setHint(defaultHint());
+  });
+  $("me-btn").addEventListener("click", function () {
+    selectOnly(state.me);
+    setMembersPanel(false);
+    setHint("Показаны только ваши отпуска. Нажмите на день, чтобы добавить отпуск.");
   });
 
   if (!chatId) {

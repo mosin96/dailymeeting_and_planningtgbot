@@ -40,33 +40,85 @@ body {
   line-height: 1;
 }
 
-.members {
+.member-bar {
   display: flex;
   gap: 8px;
-  overflow-x: auto;
-  padding: 2px 0 10px;
-  scrollbar-width: none;
+  margin-bottom: 8px;
 }
-.members::-webkit-scrollbar { display: none; }
 
-.chip {
-  flex: 0 0 auto;
+.picker-toggle {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   background: var(--card);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 8px 12px;
-  font-size: 14px;
-  max-width: 46vw;
-  white-space: nowrap;
+  border-radius: 12px;
+  padding: 11px 12px;
+  font-size: 15px;
+}
+
+.picker-toggle #members-label {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.chip.selected { border-color: var(--accent-2); background: var(--card-2); }
-.chip .dot, .legend .dot {
+
+.picker-toggle .caret { margin-left: auto; color: var(--muted); }
+
+.me-btn {
+  flex: 0 0 auto;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 0 18px;
+  font-weight: 700;
+  font-size: 15px;
+}
+.me-btn:disabled { opacity: .5; }
+
+.members-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+
+.members-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 15px;
+  text-align: left;
+}
+.member-row.selected { background: var(--card-2); }
+.member-row .check { width: 18px; color: var(--accent-2); font-weight: 700; }
+.member-row .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.members-actions { display: flex; gap: 8px; margin-top: 6px; }
+button.small { padding: 9px 12px; font-size: 14px; width: auto; flex: 1; }
+
+.member-row .dot, .picker-toggle .dot {
   width: 10px; height: 10px; border-radius: 50%;
   flex: 0 0 auto;
 }

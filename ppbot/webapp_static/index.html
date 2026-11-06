@@ -14,7 +14,21 @@
   <button id="next-month" class="nav-btn" aria-label="Следующий месяц">›</button>
 </header>
 
-<div id="members" class="members"></div>
+<div class="member-bar">
+  <button id="members-toggle" class="picker-toggle" aria-expanded="false">
+    <span class="dot" id="members-dot"></span>
+    <span id="members-label">Участники</span>
+    <span class="caret">▾</span>
+  </button>
+  <button id="me-btn" class="me-btn" title="Показать только мои отпуска">Я</button>
+</div>
+<div id="members-panel" class="members-panel hidden">
+  <div id="members-list" class="members-list"></div>
+  <div class="members-actions">
+    <button id="members-all" class="secondary small">Все</button>
+    <button id="members-done" class="primary small">Готово</button>
+  </div>
+</div>
 <div id="hint" class="hint">Открываем календарь…</div>
 
 <div class="calendar">
