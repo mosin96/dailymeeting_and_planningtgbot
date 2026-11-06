@@ -23,12 +23,17 @@ if [ -n "${PP_WEBAPP_PUBLIC_URL}" ]; then
 else
   URL_ARGS=
 fi
+if [ -n "${PP_WEBAPP_APP_NAME}" ]; then
+  APP_ARGS="-e PP_WEBAPP_APP_NAME=${PP_WEBAPP_APP_NAME}"
+else
+  APP_ARGS=
+fi
 
 docker run --name ${NAME} -d --restart=unless-stopped \
   -e PP_BOT_TOKEN=${PP_BOT_TOKEN} \
   -e PP_BOT_DB_PATH=${DB_LOCATION}/${DB_NAME} \
   -v ~/.ppbot/:${DB_LOCATION} \
-  ${CERT_MOUNTS} ${CERT_ARGS} ${URL_ARGS} \
+  ${CERT_MOUNTS} ${CERT_ARGS} ${URL_ARGS} ${APP_ARGS} \
   -p ${MINIAPP_PORT}:${MINIAPP_PORT} \
   ${NAME}
 docker logs -f ${NAME}

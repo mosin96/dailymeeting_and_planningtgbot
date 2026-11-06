@@ -47,7 +47,7 @@ The `/daily` menu also has these quick-action buttons:
 - **«Выбрать ведущего»** — opens a member picker to manually set today's leader.
 - **«Запланир. отпуска»** — planned vacations view (also available via `/vacplan`).
 - **«Напомн. о трудозатратах»** — opens a settings menu for work-hours logging reminders: a toggle to enable/disable (`/costremind`) and a reminder time (default 17:00). On the last workday of the week the bot sends «Не забудьте списать трудозатраты за неделю! Хороших выходных!», and on the last workday of the month «Не забудьте списать трудозатраты за месяц!» (last workday determined via the RU production calendar, isdayoff.ru).
-- **«📅 Отпуска (мини-апп)»** — opens the mini-app vacation calendar (shown only when `PP_WEBAPP_PUBLIC_URL` is configured, see the Mini-app section).
+- **«📅 Отпуска (мини-апп)»** — opens the mini-app vacation calendar (shown when the bot username is known at startup, see the Mini-app section).
 
 ### Vacation calendar mini-app
 
@@ -84,12 +84,24 @@ export PP_WEBAPP_PUBLIC_URL=https://BOT-DOMAIN.example.com:8443
 
 Certificates are renewed by certbot (add a `--renew` hook or a cron that copies the renewed files into `~/.ppbot/certs` and restarts the container). If no certificates are provided, the mini-app server starts in plain HTTP mode on port 8443 — fine for local debugging inside Telegram via [test tools](https://github.com/TelegramMessenger/Telegram-iOS/blob/main/submodules/TelegramUIPreferences/README.md), not for production.
 
+##### Register the Mini App in @BotFather (required!)
+
+Telegram hands `initData` (the signed user identity the API checks) **only** to real Mini Apps. A plain `https://...` URL button opens the page as a regular website inside Telegram's in-app browser — without `initData` — so the calendar API answers `401`. That is why the bot links use a `t.me` deep link instead.
+
+1. Open [@BotFather](https://t.me/BotFather) → `/mybots` → your bot → **Bot Settings → Configure Mini App → Enable Mini App** (for a dedicated app use `/newapp` and remember its **short name**). Set the URL to `https://BOT-DOMAIN.example.com:8443/` (trailing slash optional, HTTPS only).
+2. Optionally set **Main Mini App** (Bot Settings → Main Mini App) — then `https://t.me/<bot>?startapp=<chat_id>` opens it.
+3. If you created a named Mini App, set `PP_WEBAPP_APP_NAME` (e.g. `vacations`) so the bot uses `https://t.me/<bot>/<app_name>?startapp=<chat_id>`; without it the bot uses the Main Mini App link.
+
+The `/daily` menu button is built from the bot username (resolved via `getMe` at startup) and the chat id stored in the signed `start_param`, so the app knows which team it was opened from. If the username is unknown (e.g. `getMe` failed), the bot falls back to the raw `PP_WEBAPP_PUBLIC_URL?chat=...` link, which only works for debugging in a browser where you can inject init data manually.
+
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `PP_WEBAPP_PORT` | no | `8443` | Port the mini-app server listens on (inside the container) |
 | `PP_WEBAPP_CERT` | no | — | Path to the TLS certificate (PEM), enables HTTPS |
 | `PP_WEBAPP_KEY` | no | — | Path to the TLS private key (PEM) |
-| `PP_WEBAPP_PUBLIC_URL` | no | — | Public HTTPS base URL; enables the «📅 Отпуска» button in `/daily` |
+| `PP_WEBAPP_APP_NAME` | no | — | Short name of the Mini App from @BotFather; makes `/daily` link to `t.me/<bot>/<name>` instead of the Main Mini App |
+| `PP_WEBAPP_BOT_USERNAME` | no | auto (`getMe`) | Override the bot username used in `t.me` deep links |
+| `PP_WEBAPP_PUBLIC_URL` | no | — | Public HTTPS base URL; used only as a debugging fallback when the bot username is unknown |
 
 ### Manual leader override
 `/setleader @ник` (or reply to a member's message, or pick from the `/daily` menu) makes the chosen member lead **today**. The rotation continues from the member after them — the queue order is not changed.

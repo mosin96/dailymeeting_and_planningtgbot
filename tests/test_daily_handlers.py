@@ -12,6 +12,18 @@ from ppbot.daily_storage import DailyRegistry
 TZ = ZoneInfo("UTC")
 
 
+@pytest.fixture(autouse=True)
+def _reset_webapp_links(monkeypatch):
+    from ppbot.daily_ui import configure_webapp_bot
+
+    configure_webapp_bot(None)
+    monkeypatch.delenv("PP_WEBAPP_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("PP_WEBAPP_APP_NAME", raising=False)
+    monkeypatch.delenv("PP_WEBAPP_PUBLIC_URL", raising=False)
+    yield
+    configure_webapp_bot(None)
+
+
 def make_message(text=None, message_id=100, user_id=10, username="alice", first_name="Alice", chat_id=-1001, reply_to=None):
     return Message(
         message_id=message_id,

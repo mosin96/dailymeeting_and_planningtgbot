@@ -32,6 +32,16 @@ PREFIX_BACK = "daily:back"
 PREFIX_LEADER = "daily:lead"
 PREFIX_LEAD = "daily:lead:"
 PREFIX_VACPLAN = "daily:vacplan"
+
+# Bot username for the Mini App deep link, configured at startup via
+# configure_webapp_bot(bot.get_me().username).
+_webapp_bot_username: Optional[str] = None
+
+
+def configure_webapp_bot(username: Optional[str]) -> None:
+    """Remember the bot username so /daily can build a Mini App deep link."""
+    global _webapp_bot_username
+    _webapp_bot_username = (username or "").strip().lstrip("@") or None
 PREFIX_COSTREMIND = "daily:costremind"
 PREFIX_COSTREMIND_SETTIME = "daily:costremind:settime"
 PREFIX_COSTREMIND_TOGGLE = "daily:costremind:toggle"
@@ -61,11 +71,29 @@ def build_reminder_markup(leader: DailyMember, show_menu: bool = False) -> Inlin
 
 
 def _webapp_chat_url(chat_id: int) -> Optional[str]:
-    """Public mini-app URL with the chat pinned as a query parameter.
+    """Mini App deep link that pins the chat via the `startapp` payload.
 
-    None when PP_WEBAPP_PUBLIC_URL is not configured (the calendar button is
-    then omitted from the menus).
+    A plain https:// URL button opens the page as a normal website inside
+    Telegram's in-app browser (no initData!), which the API rejects with 401.
+    Only a t.me link launches a real Mini App (with signed initData):
+
+    * `https://t.me/<bot>/<app>?startapp=<chat_id>` when PP_WEBAPP_APP_NAME
+      names a dedicated Mini App configured in BotFather;
+    * `https://t.me/<bot>?startapp=<chat_id>` for the bot's Main Mini App.
+
+    When the bot username is not known yet, the raw PP_WEBAPP_PUBLIC_URL is
+    used as a last resort (useful for local debugging only).
+
+    Returns None when nothing is configured — the calendar button is then
+    omitted from the menus.
     """
+    username = _webapp_bot_username or os.environ.get("PP_WEBAPP_BOT_USERNAME", "").strip().lstrip("@")
+    if username:
+        link = "https://t.me/{}".format(username)
+        app_name = os.environ.get("PP_WEBAPP_APP_NAME", "").strip().strip("/")
+        if app_name:
+            link += "/" + app_name
+        return "{}?startapp={}".format(link, chat_id)
     base = os.environ.get("PP_WEBAPP_PUBLIC_URL", "").strip().rstrip("/")
     if not base:
         return None

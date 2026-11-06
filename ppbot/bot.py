@@ -12,6 +12,8 @@ from aiogram.types import BotCommand, Message
 
 from ppbot.utils import init_logging
 
+logger = logging.getLogger(__name__)
+
 TOKEN = os.environ["PP_BOT_TOKEN"]
 DB_PATH = os.environ.get("PP_BOT_DB_PATH", os.path.expanduser("~/.tg_pp_bot.db"))
 TZ_NAME = os.environ.get("PP_BOT_TZ", "Europe/Moscow")
@@ -105,6 +107,17 @@ def main():
         await bot.set_my_commands(
             [BotCommand(command=cmd, description=desc) for cmd, desc in COMMANDS]
         )
+        # The bot username is needed to build Mini App deep links
+        # (t.me/<bot>?startapp=...): a plain URL button would open the page
+        # without initData and the calendar API would reject it.
+        from ppbot.daily_ui import configure_webapp_bot
+
+        try:
+            me = await bot.get_me()
+            configure_webapp_bot(me.username)
+            logger.info("mini-app deep links target @%s", me.username)
+        except Exception:
+            logger.warning("could not resolve bot username for mini-app links", exc_info=True)
         # Mini-app HTTP(S) server: runs in the same loop as polling and the
         # reminder cycle. Started as a task so a port/cert problem degrades
         # to a warning instead of killing the bot.

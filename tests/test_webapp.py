@@ -18,13 +18,15 @@ TOKEN = "12345:test-token"
 TZ = ZoneInfo("UTC")
 
 
-def make_init_data(user_id=777, token=TOKEN, age_seconds=0):
+def make_init_data(user_id=777, token=TOKEN, age_seconds=0, start_param=None):
     """Build a properly signed Telegram WebApp initData string."""
     user = {"id": user_id, "first_name": "Test"}
     ts = int(
         (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=age_seconds)).timestamp()
     )
     params = {"query_id": "AAA", "user": json.dumps(user), "auth_date": str(ts)}
+    if start_param is not None:
+        params["start_param"] = str(start_param)
     dcs = "\n".join(f"{k}={v}" for k, v in sorted(params.items()))
     secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
     signature = hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest()
@@ -90,6 +92,57 @@ async def test_state_returns_members_and_vacations(client):
     member = data["members"][0]
     assert member["position"] == 0 and member["name"] == "Иван"
     assert member["vacations"] == [{"id": member["vacations"][0]["id"], "start": "2026-12-01", "end": "2026-12-10"}]
+
+
+@pytest.mark.asyncio
+async def test_state_works_with_start_param_and_no_query_chat(client):
+    """Mini App deep link carries the chat in the signed start_param
+    (t.me/<bot>?startapp=<chat_id>); the page URL has no ?chat= then."""
+    c, storage = client
+    await _seed_member(storage)
+    await storage.add_vacation(-1001, 0, "2026-12-01", "2026-12-10")
+    resp = await c.get(
+        "/api/state",
+        headers=_headers(make_init_data(user_id=777, start_param="-1001")),
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["chat"] == -1001
+    assert data["members"][0]["vacations"][0]["end"] == "2026-12-10"
+
+
+@pytest.mark.asyncio
+async def test_start_param_takes_precedence_over_query(client):
+    """A forged ?chat= cannot redirect the request away from the signed chat."""
+    c, storage = client
+    await _seed_member(storage, chat_id=-1001, user_id=777)
+    await _seed_member(storage, chat_id=-2002, position=0, user_id=42, name="Друзья")
+    resp = await c.get(
+        "/api/state?chat=-2002",
+        headers=_headers(make_init_data(user_id=777, start_param="-1001")),
+    )
+    assert resp.status == 200
+    assert (await resp.json())["chat"] == -1001
+
+
+@pytest.mark.asyncio
+async def test_post_with_start_param_chat(client):
+    """POST /api/vacations works from the deep-link flow: the signed
+    start_param supplies the chat even when the body has no chat field."""
+    c, storage = client
+    await _seed_member(storage)
+    from ppbot.daily import today_in_tz
+
+    today = today_in_tz(TZ)
+    start = today + datetime.timedelta(days=10)
+    end = today + datetime.timedelta(days=15)
+    resp = await c.post(
+        "/api/vacations",
+        json={"position": 0, "start": start.isoformat(), "end": end.isoformat()},
+        headers=_headers(make_init_data(user_id=777, start_param="-1001")),
+    )
+    assert resp.status == 200
+    assert len(await storage.get_vacations(-1001)) == 1
 
 
 @pytest.mark.asyncio

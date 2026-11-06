@@ -129,9 +129,18 @@ def create_app(daily: DailyRegistry, tz, token: str, workdays=None) -> web.Appli
 
     async def _authenticate(request: web.Request, daily_: DailyRegistry, raw_chat) -> Tuple[int, DailyMember]:
         """Validate initData, resolve and authorize the chat, return
-        (chat_id, the requesting member)."""
+        (chat_id, the requesting member).
+
+        The chat comes from the signed `start_param` payload (Mini App deep
+        link `t.me/<bot>?startapp=<chat_id>`) and only falls back to the
+        query/body value for local debugging. Membership is what actually
+        authorizes the request either way.
+        """
         raw = request.headers.get("X-Telegram-Init-Data", "")
         if not raw:
+            logger.warning(
+                "mini-app request without initData (page opened as a plain web link instead of a Mini App?)"
+            )
             raise web.HTTPUnauthorized(text="Нет initData")
         try:
             from aiogram.utils.web_app import safe_parse_webapp_init_data
@@ -147,6 +156,9 @@ def create_app(daily: DailyRegistry, tz, token: str, workdays=None) -> web.Appli
             raise web.HTTPUnauthorized(text="Некорректная initData")
         if age > INIT_DATA_MAX_AGE or age < -INIT_DATA_FUTURE_TOLERANCE:
             raise web.HTTPUnauthorized(text="initData устарела")
+        start_param = (getattr(data, "start_param", None) or "").strip()
+        if start_param:
+            raw_chat = start_param
         try:
             chat_id = int(raw_chat)
         except (ValueError, TypeError):

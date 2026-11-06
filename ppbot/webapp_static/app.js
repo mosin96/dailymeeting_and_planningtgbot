@@ -43,7 +43,17 @@
     selEnd: null
   };
 
-  var chatId = new URLSearchParams(window.location.search).get("chat") || "";
+  var chatId = (function () {
+    var fromStart = "";
+    try {
+      if (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) {
+        fromStart = String(tg.initDataUnsafe.start_param);
+      }
+    } catch (e) {}
+    var qs = new URLSearchParams(window.location.search);
+    var fromQuery = qs.get("chat") || qs.get("tgWebAppStartParam") || "";
+    return fromStart || fromQuery;
+  })();
   var initHeader = tg ? (tg.initData || "") : "";
   var $ = function (id) { return document.getElementById(id); };
 
@@ -82,6 +92,7 @@
       headers: { "X-Telegram-Init-Data": initHeader }
     })
       .then(function (r) {
+        if (r.status === 401) throw new Error("Откройте календарь кнопкой «Отпуска» в чате Telegram");
         if (r.status === 403) throw new Error("Вы не участник этой команды");
         if (!r.ok) throw new Error("Ошибка сервера " + r.status);
         return r.json();
@@ -367,7 +378,9 @@
   });
 
   if (!chatId) {
-    setHint("Откройте календарь из чата команды (кнопка в меню /daily)");
+    setHint("Откройте календарь из чата команды (кнопка «Отпуска» в меню /daily)");
+  } else if (!initHeader) {
+    setHint("Откройте календарь из Telegram — без initData сервер не пустит. Прямая ссылка в браузере не подходит.");
   } else {
     loadState();
   }

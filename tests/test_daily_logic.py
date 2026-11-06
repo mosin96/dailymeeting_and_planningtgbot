@@ -18,6 +18,20 @@ from ppbot.daily import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_webapp_links(monkeypatch):
+    """Keep the module-level bot username / mini-app env vars from leaking
+    between tests (the /daily markup depends on them)."""
+    from ppbot.daily_ui import configure_webapp_bot
+
+    configure_webapp_bot(None)
+    monkeypatch.delenv("PP_WEBAPP_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("PP_WEBAPP_APP_NAME", raising=False)
+    monkeypatch.delenv("PP_WEBAPP_PUBLIC_URL", raising=False)
+    yield
+    configure_webapp_bot(None)
+
+
 def member(
     pos, name="X", user_id=None, username=None, skip_date=None,
     vacation_until=None, vacation_start=None,
@@ -798,24 +812,32 @@ def test_planned_vacation_filter_uses_vacation_list():
 
 
 def test_menu_markup_has_miniapp_button_without_url(monkeypatch):
-    from ppbot.daily_ui import build_menu_markup
+    from ppbot.daily_ui import build_menu_markup, configure_webapp_bot
 
+    configure_webapp_bot(None)
     monkeypatch.delenv("PP_WEBAPP_PUBLIC_URL", raising=False)
+    monkeypatch.delenv("PP_WEBAPP_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("PP_WEBAPP_APP_NAME", raising=False)
     markup = build_menu_markup(-1001)
     flat = [
         (btn.text, btn.callback_data, btn.url)
         for row in markup.inline_keyboard
         for btn in row
     ]
-    # no mini-app button when PP_WEBAPP_PUBLIC_URL is unset
+    # no mini-app button when no link can be built
     assert not any(t == "📅 Отпуска (мини-апп)" for t, _, _ in flat)
     # planned vacations button is still there
     assert ("Запланир. отпуска", "daily:vacplan", None) in flat
 
 
 def test_menu_markup_includes_miniapp_link_with_chat(monkeypatch):
-    from ppbot.daily_ui import build_menu_markup
+    """Fallback: raw public URL (local debugging) when the bot username is
+    unknown (e.g. the getMe call failed)."""
+    from ppbot.daily_ui import build_menu_markup, configure_webapp_bot
 
+    configure_webapp_bot(None)
+    monkeypatch.delenv("PP_WEBAPP_BOT_USERNAME", raising=False)
+    monkeypatch.delenv("PP_WEBAPP_APP_NAME", raising=False)
     monkeypatch.setenv("PP_WEBAPP_PUBLIC_URL", "https://bot.example.com:8443/")
     markup = build_menu_markup(-1001234567890)
     urls = [
@@ -825,6 +847,40 @@ def test_menu_markup_includes_miniapp_link_with_chat(monkeypatch):
         if btn.text == "📅 Отпуска (мини-апп)"
     ]
     assert urls == ["https://bot.example.com:8443?chat=-1001234567890"]
+
+
+def test_menu_markup_uses_main_miniapp_deeplink(monkeypatch):
+    """With the bot username known the button must be a t.me Mini App link
+    (a plain https URL button opens the page without initData)."""
+    from ppbot.daily_ui import build_menu_markup, configure_webapp_bot
+
+    monkeypatch.delenv("PP_WEBAPP_APP_NAME", raising=False)
+    configure_webapp_bot("ppbot")
+    markup = build_menu_markup(-1001234567890)
+    urls = [
+        btn.url
+        for row in markup.inline_keyboard
+        for btn in row
+        if btn.text == "📅 Отпуска (мини-апп)"
+    ]
+    assert urls == ["https://t.me/ppbot?startapp=-1001234567890"]
+    configure_webapp_bot(None)
+
+
+def test_menu_markup_uses_named_miniapp_deeplink(monkeypatch):
+    from ppbot.daily_ui import build_menu_markup, configure_webapp_bot
+
+    monkeypatch.setenv("PP_WEBAPP_APP_NAME", "vacations")
+    configure_webapp_bot("ppbot")
+    markup = build_menu_markup(-1001)
+    urls = [
+        btn.url
+        for row in markup.inline_keyboard
+        for btn in row
+        if btn.text == "📅 Отпуска (мини-апп)"
+    ]
+    assert urls == ["https://t.me/ppbot/vacations?startapp=-1001"]
+    configure_webapp_bot(None)
 
 
 def test_build_member_picker_markup_no_longer_vacation_aware():
