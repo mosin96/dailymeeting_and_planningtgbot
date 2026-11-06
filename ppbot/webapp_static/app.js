@@ -86,7 +86,6 @@
   }
 
   function setHint(msg) { $("hint").textContent = msg; }
-  function setHintHtml(html) { $("hint").innerHTML = html; }
 
   function defaultHint() {
     if (state.selected.length === 1) {
@@ -206,6 +205,7 @@
       row.addEventListener("click", function () { toggleMember(m.position); });
       list.appendChild(row);
     });
+    renderVacationsList();
   }
 
   function toggleMember(pos) {
@@ -235,6 +235,73 @@
     $("members-panel").classList.toggle("hidden", !open);
     $("members-toggle").setAttribute("aria-expanded", open ? "true" : "false");
     $("members-toggle").querySelector(".caret").textContent = open ? "▴" : "▾";
+  }
+
+  /* ---------- vacations list for the selected members ---------- */
+
+  function renderVacationsList() {
+    var box = $("vacations-list");
+    box.innerHTML = "";
+
+    if (state.selected.length === 0) {
+      var pick = document.createElement("div");
+      pick.className = "vacation-empty";
+      pick.textContent = "Выберите участников в списке сверху.";
+      box.appendChild(pick);
+      return;
+    }
+
+    var entries = [];
+    state.members.forEach(function (m) {
+      if (!isSelected(m.position)) return;
+      m.vacations.forEach(function (v) { entries.push({ member: m, vacation: v }); });
+    });
+    entries.sort(function (a, b) {
+      var as = a.vacation.start === null ? "0000-01-01" : a.vacation.start;
+      var bs = b.vacation.start === null ? "0000-01-01" : b.vacation.start;
+      if (as !== bs) return as < bs ? -1 : 1;
+      if (a.vacation.end !== b.vacation.end) return a.vacation.end < b.vacation.end ? -1 : 1;
+      return a.member.position - b.member.position;
+    });
+
+    if (!entries.length) {
+      var empty = document.createElement("div");
+      empty.className = "vacation-empty";
+      empty.textContent = "У выбранных участников отпусков нет.";
+      box.appendChild(empty);
+      return;
+    }
+
+    entries.forEach(function (e) {
+      var row = document.createElement("div");
+      row.className = "vacation-row";
+
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = colorOf(e.member.position);
+
+      var name = document.createElement("span");
+      name.className = "v-name";
+      name.textContent = e.member.name;
+
+      var period = document.createElement("span");
+      period.className = "v-period";
+      period.textContent = periodLabel(e.vacation);
+
+      var del = document.createElement("button");
+      del.className = "v-del";
+      del.textContent = "✕";
+      del.setAttribute("aria-label", "Удалить отпуск");
+      del.addEventListener("click", function () {
+        confirmDeleteVacation(e.member, e.vacation);
+      });
+
+      row.appendChild(dot);
+      row.appendChild(name);
+      row.appendChild(period);
+      row.appendChild(del);
+      box.appendChild(row);
+    });
   }
 
   /* ---------- calendar ---------- */
@@ -404,7 +471,7 @@
 
     var bar = ev.target.closest(".mark");
     if (bar && !state.selStart) {
-      askDelete(bar.dataset.vacationId, iso);
+      askDelete(bar.dataset.vacationId);
       return;
     }
     if (iso < today) { setHint("Прошедшие дни изменить нельзя"); return; }
@@ -416,32 +483,23 @@
     }
 
     if (!state.selStart) {
+      // first tap: range start
       state.selStart = iso;
       state.selEnd = null;
-      setHint("Начало отпуска " + memberName(state.selected[0]) + ": " + ruDate(iso) + ". Выберите последний день.");
-      renderCalendar();
-      updateUi();
-      return;
-    }
-
-    if (iso < state.selStart) {  // restarted selection
+    } else if (state.selEnd !== null) {
+      // range already chosen: this tap starts a new range
       state.selStart = iso;
       state.selEnd = null;
-      setHint("Начало отпуска " + memberName(state.selected[0]) + ": " + ruDate(iso) + ". Выберите последний день.");
-      renderCalendar();
-      updateUi();
-      return;
+    } else if (iso < state.selStart) {
+      // picked an earlier day: restart from it
+      state.selStart = iso;
+      state.selEnd = null;
+    } else {
+      // second tap: range end; confirming is done via «Добавить отпуск»
+      state.selEnd = iso;
     }
-
-    state.selEnd = iso;
-    var name = memberName(state.selected[0]);
-    showPopup(
-      "Добавить отпуск",
-      name + ": с " + ruDate(state.selStart) + " по " + ruDate(state.selEnd),
-      "Добавить",
-      confirmAdd,
-      false
-    );
+    renderCalendar();
+    updateUi();
   }
 
   function confirmAdd() {
@@ -466,14 +524,28 @@
       .catch(function (err) { setHint(err.message); });
   }
 
-  function askDelete(vacationId, iso) {
-    var m = state.members.filter(function (mm) {
-      return mm.vacations.some(function (v) { return String(v.id) === String(vacationId); });
-    })[0];
-    var v = m.vacations.filter(function (vv) { return String(vv.id) === String(vacationId); })[0];
-    var label = (m ? m.name : "") + ": " + (v.start === null ? "до" : "с " + ruDate(v.start) + " по") + " " + ruDate(v.end);
+  function findVacation(vacationId) {
+    for (var i = 0; i < state.members.length; i++) {
+      var m = state.members[i];
+      for (var j = 0; j < m.vacations.length; j++) {
+        if (String(m.vacations[j].id) === String(vacationId)) {
+          return { member: m, vacation: m.vacations[j] };
+        }
+      }
+    }
+    return null;
+  }
+
+  function askDelete(vacationId) {
+    var found = findVacation(vacationId);
+    if (!found) return;
+    confirmDeleteVacation(found.member, found.vacation);
+  }
+
+  function confirmDeleteVacation(member, vacation) {
+    var label = member.name + ": " + periodLabel(vacation);
     showPopup("Удалить отпуск", label, "Удалить", function () {
-      apiCall("DELETE", "/api/vacations/" + vacationId + "?chat=" + encodeURIComponent(chatId))
+      apiCall("DELETE", "/api/vacations/" + vacation.id + "?chat=" + encodeURIComponent(chatId))
         .then(function () {
           if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
           loadState("Отпуск удалён");
@@ -517,8 +589,17 @@
   function updateUi() {
     var single = state.selected.length === 1;
     $("add-btn").disabled = !(single && state.selStart);
-    if (state.selStart) {
-      setHintHtml("Выбрано: с " + ruDate(state.selStart) + (state.selEnd ? " по " + ruDate(state.selEnd) : ""));
+    if (!state.selStart) return;
+    if (state.selEnd !== null) {
+      setHint(
+        "Выбрано: " + ruDate(state.selStart) + " – " + ruDate(state.selEnd) +
+        ". Нажмите «Добавить отпуск», чтобы сохранить."
+      );
+    } else {
+      setHint(
+        "Начало отпуска " + memberName(state.selected[0]) + ": " + ruDate(state.selStart) +
+        ". Выберите последний день или сразу нажмите «Добавить отпуск»."
+      );
     }
   }
 

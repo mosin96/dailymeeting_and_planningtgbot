@@ -73,6 +73,23 @@ async def test_static_files_exist():
     assert 'id="me-btn"' in index
     assert ">Я<" in index
     assert 'id="day-tooltip"' in index
+    assert 'id="vacations-list"' in index
+
+
+@pytest.mark.asyncio
+async def test_app_js_lists_vacations_and_confirms_only_on_button():
+    from ppbot.webapp import STATIC_DIR
+
+    code = open(STATIC_DIR + "/app.js", encoding="utf-8").read()
+    assert "renderVacationsList" in code
+    assert "confirmDeleteVacation" in code
+    # the second date tap must NOT open the confirmation popup;
+    # adding is confirmed only by the «Добавить отпуск» button.
+    start = code.index("function onDayClick")
+    end = code.index("function confirmAdd")
+    assert "showPopup" not in code[start:end]
+    # a third tap starts a new range: selEnd is reset in the day-click flow
+    assert "state.selEnd = null" in code[start:end]
 
 
 @pytest.mark.asyncio

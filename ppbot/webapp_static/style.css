@@ -118,7 +118,7 @@ body {
 .members-actions { display: flex; gap: 8px; margin-top: 6px; }
 button.small { padding: 9px 12px; font-size: 14px; width: auto; flex: 1; }
 
-.member-row .dot, .picker-toggle .dot {
+.member-row .dot, .picker-toggle .dot, .vacation-row .dot {
   width: 10px; height: 10px; border-radius: 50%;
   flex: 0 0 auto;
 }
@@ -180,6 +180,42 @@ button.small { padding: 9px 12px; font-size: 14px; width: auto; flex: 1; }
 }
 
 .footer { margin-top: 12px; }
+
+.vacations { margin-top: 14px; }
+.vacations-title { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+.vacations-list { display: flex; flex-direction: column; gap: 6px; }
+.vacation-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font-size: 14px;
+}
+.vacation-row .v-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vacation-row .v-period {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.vacation-row .v-del {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--danger);
+  font-size: 14px;
+  line-height: 1;
+}
+.vacation-empty { color: var(--muted); font-size: 13px; padding: 2px; }
 
 button.primary, button.secondary {
   width: 100%;
