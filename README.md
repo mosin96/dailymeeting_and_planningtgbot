@@ -56,7 +56,7 @@ The `/daily` menu also has these quick-action buttons:
 Vacations are managed in a Telegram mini-app (WebApp): open the `/daily` menu in the team chat and tap **«📅 Отпуска (мини-апп)»**. The app shows the team members (as colored chips) and a month calendar:
 
 - Each member has a color; vacations are drawn as colored bars in the day cells of the range (inclusive).
-- Team members are shown in a collapsible dropdown with **multi-select**: any combination of members can be displayed at once (the «Все» button selects everyone). By default the member who opened the app is selected, and the **«Я»** button quickly switches back to only your own vacations.
+- Team members are shown in a collapsible dropdown with **multi-select**: any combination of members can be displayed at once (the «Все» button selects everyone, «Сбросить выбор» clears the selection). By default the member who opened the app is selected, and the **«Я»** button quickly switches back to only your own vacations.
 - To add a vacation: make sure exactly one member is selected (or press «Я»), tap the first day, then the last day (today or later). Nothing is saved yet — press the **«Добавить отпуск»** button and confirm in the popup. If a range is already selected, tapping another day starts a new range from that day. The selected start is kept when you switch months, so a vacation can start in one month and end in another.
 - Under the button there is a list of **all vacations of the selected members** (name, color, period), each with a **✕** button to delete it.
 - To remove from the calendar: tap the colored bar of the vacation and confirm in the popup.

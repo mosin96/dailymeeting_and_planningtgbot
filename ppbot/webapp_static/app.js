@@ -39,6 +39,7 @@
     me: null,             // position of the member who opened the app
     selected: [],         // positions shown on the calendar (multi-select)
     selectionInitialized: false,
+    selectionCleared: false,
     viewInitialized: false,
     viewYear: 2016,
     viewMonth: 0,         // 0..11
@@ -124,7 +125,9 @@
         state.selected = state.selected.filter(function (pos) {
           return memberByPosition(pos) !== null;
         });
-        if (state.selected.length === 0 && state.me !== null) state.selected = [state.me];
+        if (state.selected.length === 0 && state.me !== null && !state.selectionCleared) {
+          state.selected = [state.me];
+        }
         if (!state.viewInitialized) {
           // Start on the current month; later reloads (after add/delete) keep
           // the month the user is browsing.
@@ -220,6 +223,7 @@
     var i = state.selected.indexOf(pos);
     if (i === -1) state.selected.push(pos);
     else state.selected.splice(i, 1);
+    state.selectionCleared = false;
     state.selStart = null;
     state.selEnd = null;
     renderMembers();
@@ -231,6 +235,19 @@
   function selectOnly(pos) {
     if (pos === null) return;
     state.selected = [pos];
+    state.selectionCleared = false;
+    state.selStart = null;
+    state.selEnd = null;
+    renderMembers();
+    renderCalendar();
+    updateUi();
+    setHint(defaultHint());
+  }
+
+  function clearMemberSelection() {
+    state.selected = [];
+    state.selectionCleared = true;
+    state.selectionInitialized = true;
     state.selStart = null;
     state.selEnd = null;
     renderMembers();
@@ -646,8 +663,10 @@
     setMembersPanel($("members-panel").classList.contains("hidden"));
   });
   $("members-done").addEventListener("click", function () { setMembersPanel(false); });
+  $("members-reset").addEventListener("click", clearMemberSelection);
   $("members-all").addEventListener("click", function () {
     state.selected = state.members.map(function (m) { return m.position; });
+    state.selectionCleared = false;
     state.selStart = null;
     state.selEnd = null;
     renderMembers();

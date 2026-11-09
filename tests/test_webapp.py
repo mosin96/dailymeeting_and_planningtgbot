@@ -74,6 +74,24 @@ async def test_static_files_exist():
     assert ">Я<" in index
     assert 'id="day-tooltip"' in index
     assert 'id="vacations-list"' in index
+    # reset-selection button sits above "Все" and "Готово"
+    assert 'id="members-reset"' in index
+    assert "Сбросить выбор" in index
+    assert index.index('id="members-reset"') < index.index('id="members-all"')
+
+
+@pytest.mark.asyncio
+async def test_app_js_members_reset_clears_selection():
+    from ppbot.webapp import STATIC_DIR
+
+    code = open(STATIC_DIR + "/app.js", encoding="utf-8").read()
+    start = code.index("function clearMemberSelection")
+    end = code.index("function setMembersPanel")
+    block = code[start:end]
+    assert "state.selected = []" in block
+    assert "state.selStart = null" in block
+    assert "state.selEnd = null" in block
+    assert "$(\"members-reset\").addEventListener" in code
 
 
 @pytest.mark.asyncio
