@@ -62,7 +62,9 @@
 
   function isoOf(d) {
     var m = d.getMonth() + 1, day = d.getDate();
-    return d.getFullYear() + "-" + (m < 10 ? "0" : m) + "-" + (day < 10 ? "0" : day);
+    return d.getFullYear() + "-" +
+      (m < 10 ? "0" + m : m) + "-" +
+      (day < 10 ? "0" + day : day);
   }
   function parseIso(s) {
     var parts = s.split("-");

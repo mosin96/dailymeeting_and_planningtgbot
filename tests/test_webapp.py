@@ -93,6 +93,22 @@ async def test_app_js_lists_vacations_and_confirms_only_on_button():
 
 
 @pytest.mark.asyncio
+async def test_app_js_iso_date_pads_single_digit_month_and_day():
+    """Regression: the padding ternary used to return just "0" without the
+    number, so 1..9 November produced "2026-11-0" ("0.11.2026"), days were
+    treated as past and today could not be selected."""
+    from ppbot.webapp import STATIC_DIR
+
+    code = open(STATIC_DIR + "/app.js", encoding="utf-8").read()
+    start = code.index("function isoOf")
+    end = code.index("function parseIso")
+    body = code[start:end]
+    assert '"0" + m' in body
+    assert '"0" + day' in body
+    assert '? "0" :' not in body
+
+
+@pytest.mark.asyncio
 async def test_app_js_keeps_range_across_month_navigation():
     """A vacation can start in one month and end in another: switching the
     visible month must not discard the already chosen range start."""
