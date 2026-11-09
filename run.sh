@@ -8,7 +8,9 @@ CERT_DIR=${CERT_DIR:-$HOME/.ppbot/certs}
 CERT_FILE=${CERT_FILE:-fullchain.pem}
 KEY_FILE=${KEY_FILE:-privkey.pem}
 
-docker build -t ${NAME} .
+GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
+docker build --build-arg PP_BUILD_COMMIT="${GIT_COMMIT}" -t ${NAME} .
 docker rm -f ${NAME} || true
 if [ -f "${CERT_DIR}/${CERT_FILE}" ] && [ -f "${CERT_DIR}/${KEY_FILE}" ]; then
   CERT_ARGS="-e PP_WEBAPP_CERT=/certs/${CERT_FILE} -e PP_WEBAPP_KEY=/certs/${KEY_FILE}"

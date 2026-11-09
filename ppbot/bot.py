@@ -11,6 +11,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import BotCommand, Message
 
 from ppbot.utils import init_logging
+from ppbot.version import build_commit
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,8 @@ def main():
     from ppbot.daily_storage import DailyRegistry
     from ppbot.scheduler import reminder_loop
     from ppbot.workdays import WorkdayClient
+
+    logger.info("ppbot starting (commit %s)", build_commit())
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)

@@ -198,6 +198,14 @@ PP_BOT_TOKEN=11111424242:some-token ./run.sh
 
 It will recreate the image and container `ppbot`. The bot uses a sqlite database at host in `~/.ppbot/tg_pp_bot.db` (default).
 
+`run.sh` bakes the current git commit into the image (`GIT_COMMIT=$(git rev-parse --short HEAD)`), and the bot logs it on startup:
+
+```
+ppbot starting (commit 5128217)
+```
+
+So `docker logs ppbot` immediately shows which version is running. When the bot is started directly from a checkout (`python ppbot/bot.py`), the commit is read from git instead.
+
 ## Environment variables
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -205,6 +213,7 @@ It will recreate the image and container `ppbot`. The bot uses a sqlite database
 | `PP_BOT_DB_PATH` | no | `~/.tg_pp_bot.db` | SQLite database path |
 | `PP_BOT_TZ` | no | `Europe/Moscow` | Timezone for daily reminders (IANA name, e.g. `Europe/Moscow`) |
 | `PP_WORKDAY_COUNTRY` | no | `RU` | ISO country code for the public-holidays calendar (date.nager.at), e.g. `RU`, `BY`, `KZ`, `DE` |
+| `PP_BUILD_COMMIT` | no | auto (`git` / `unknown`) | Commit shown in the startup log; `run.sh` passes it into the Docker image automatically |
 | `PP_WEBAPP_PORT` / `PP_WEBAPP_CERT` / `PP_WEBAPP_KEY` / `PP_WEBAPP_PUBLIC_URL` | no | see Mini-app section | Mini-app (vacation calendar) server settings |
 
 ## Development
