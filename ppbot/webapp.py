@@ -25,6 +25,25 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "webapp_static")
 
+
+def _asset_version(filename: str) -> str:
+    """Cache-busting token for a static file (mtime + size)."""
+    try:
+        stat = os.stat(os.path.join(STATIC_DIR, filename))
+    except OSError:
+        return "0"
+    return "{:x}-{:x}".format(stat.st_mtime_ns, stat.st_size)
+
+
+@web.middleware
+async def _no_cache_static(request: web.Request, handler):
+    """Never let Telegram's WebView keep an outdated mini-app shell/assets."""
+    response = await handler(request)
+    if request.path == "/" or request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
 # initData can be replayed; accept only recent payloads.
 INIT_DATA_MAX_AGE = datetime.timedelta(hours=24)
 INIT_DATA_FUTURE_TOLERANCE = datetime.timedelta(minutes=5)
@@ -52,10 +71,20 @@ def _init_data_age(data) -> Optional[datetime.timedelta]:
 
 
 def create_app(daily: DailyRegistry, tz, token: str, workdays=None) -> web.Application:
-    app = web.Application(client_max_size=64 * 1024)
+    app = web.Application(middlewares=[_no_cache_static], client_max_size=64 * 1024)
 
-    async def index(request: web.Request) -> web.StreamResponse:
-        return web.FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    async def index(request: web.Request) -> web.Response:
+        with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8") as fh:
+            html = fh.read()
+        # Versioned URLs guarantee that a new app.js/style.css is fetched even
+        # if the WebView cached the shell or the assets themselves.
+        html = html.replace(
+            "/static/app.js", "/static/app.js?v={}".format(_asset_version("app.js"))
+        )
+        html = html.replace(
+            "/static/style.css", "/static/style.css?v={}".format(_asset_version("style.css"))
+        )
+        return web.Response(text=html, content_type="text/html", charset="utf-8")
 
     async def api_state(request: web.Request) -> web.Response:
         chat_id, member = await _authenticate(request, daily, request.query.get("chat"))

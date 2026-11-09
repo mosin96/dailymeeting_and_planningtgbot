@@ -173,6 +173,23 @@ async def test_index_served(client):
 
 
 @pytest.mark.asyncio
+async def test_static_assets_are_not_cached(client):
+    """The mini-app shell and assets must not stay stale in Telegram's
+    WebView: versioned URLs plus no-store cache headers."""
+    c, storage = client
+    resp = await c.get("/")
+    assert resp.status == 200
+    assert "no-store" in resp.headers.get("Cache-Control", "")
+    body = await resp.text()
+    assert "/static/app.js?v=" in body
+    assert "/static/style.css?v=" in body
+
+    resp = await c.get("/static/app.js")
+    assert resp.status == 200
+    assert "no-store" in resp.headers.get("Cache-Control", "")
+
+
+@pytest.mark.asyncio
 async def test_state_returns_members_and_vacations(client):
     c, storage = client
     await _seed_member(storage)
