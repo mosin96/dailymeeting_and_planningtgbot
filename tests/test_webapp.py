@@ -93,6 +93,38 @@ async def test_app_js_lists_vacations_and_confirms_only_on_button():
 
 
 @pytest.mark.asyncio
+async def test_app_js_keeps_range_across_month_navigation():
+    """A vacation can start in one month and end in another: switching the
+    visible month must not discard the already chosen range start."""
+    from ppbot.webapp import STATIC_DIR
+
+    code = open(STATIC_DIR + "/app.js", encoding="utf-8").read()
+    start = code.index('$("prev-month")')
+    end = code.index('$("add-btn").addEventListener')
+    block = code[start:end]
+    assert "state.selStart = null" not in block
+    assert "state.selEnd = null" not in block
+    # the hint about the pending range is refreshed after navigation
+    assert block.count("updateUi()") >= 2
+    # reloads after add/delete keep the browsed month
+    assert "viewInitialized" in code
+
+
+@pytest.mark.asyncio
+async def test_app_js_allows_today_as_vacation_start():
+    """Only days strictly before today are read-only; today itself can be the
+    first day of a vacation."""
+    from ppbot.webapp import STATIC_DIR
+
+    code = open(STATIC_DIR + "/app.js", encoding="utf-8").read()
+    start = code.index("function onDayClick")
+    end = code.index("function confirmAdd")
+    block = code[start:end]
+    assert "if (iso < today)" in block
+    assert "if (iso <= today)" not in block
+
+
+@pytest.mark.asyncio
 async def test_app_js_implements_day_tooltip():
     from ppbot.webapp import STATIC_DIR
 
@@ -324,6 +356,42 @@ async def test_add_vacation(client):
     assert body["start"] == start.isoformat()
     members = await storage.get_members(-1001)
     assert members[0].is_on_vacation((start + datetime.timedelta(days=1)).isoformat()) is True
+
+
+@pytest.mark.asyncio
+async def test_add_vacation_can_start_today(client):
+    """A vacation may start on the current day (not only tomorrow)."""
+    c, storage = client
+    await _seed_member(storage)
+    from ppbot.daily import today_in_tz
+
+    today = today_in_tz(TZ)
+    headers = _headers(make_init_data(user_id=777))
+
+    # a one-day vacation today
+    resp = await c.post(
+        "/api/vacations",
+        json={"chat": -1001, "position": 0, "start": today.isoformat(), "end": today.isoformat()},
+        headers=headers,
+    )
+    assert resp.status == 200
+
+    # a range starting today
+    resp = await c.post(
+        "/api/vacations",
+        json={
+            "chat": -1001,
+            "position": 0,
+            "start": today.isoformat(),
+            "end": (today + datetime.timedelta(days=2)).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status == 200
+
+    members = await storage.get_members(-1001)
+    assert members[0].is_on_vacation(today.isoformat()) is True
+    assert [v.start for v in members[0].vacations] == [today.isoformat(), today.isoformat()]
 
 
 @pytest.mark.asyncio

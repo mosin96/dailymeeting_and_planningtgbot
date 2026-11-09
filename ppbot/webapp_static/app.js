@@ -39,6 +39,7 @@
     me: null,             // position of the member who opened the app
     selected: [],         // positions shown on the calendar (multi-select)
     selectionInitialized: false,
+    viewInitialized: false,
     viewYear: 2016,
     viewMonth: 0,         // 0..11
     selStart: null,       // ISO string
@@ -122,9 +123,14 @@
           return memberByPosition(pos) !== null;
         });
         if (state.selected.length === 0 && state.me !== null) state.selected = [state.me];
-        var t = parseIso(data.today);
-        state.viewYear = t.getFullYear();
-        state.viewMonth = t.getMonth();
+        if (!state.viewInitialized) {
+          // Start on the current month; later reloads (after add/delete) keep
+          // the month the user is browsing.
+          state.viewInitialized = true;
+          var t = parseIso(data.today);
+          state.viewYear = t.getFullYear();
+          state.viewMonth = t.getMonth();
+        }
         renderMembers();
         renderCalendar();
         updateUi();
@@ -607,17 +613,18 @@
     var m = state.viewMonth - 1;
     if (m < 0) { m = 11; state.viewYear--; }
     state.viewMonth = m;
-    state.selStart = null;
-    state.selEnd = null;
+    // Keep the range selection: a vacation may start in one month and end in
+    // another, so switching months must not discard the chosen start date.
     renderCalendar();
+    updateUi();
   });
   $("next-month").addEventListener("click", function () {
     var m = state.viewMonth + 1;
     if (m > 11) { m = 0; state.viewYear++; }
     state.viewMonth = m;
-    state.selStart = null;
-    state.selEnd = null;
+    // Keep the range selection (see prev-month).
     renderCalendar();
+    updateUi();
   });
 
   $("add-btn").addEventListener("click", function () {
