@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import List, Optional
 
 from aiogram import F, Router
@@ -10,20 +9,20 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, User
+from aiogram.types import CallbackQuery, Message
 
-from ppbot.daily import (
-    DailyChat,
-    DailyMember,
-    apply_skip,
-    apply_substitute,
-    next_scheduled_date,
-    set_leader,
-    today_in_tz,
-)
-from ppbot.daily_storage import (
-    DailyRegistry,
-    refresh_schedule_window,
+from ppbot.daily import DailyChat, DailyMember, today_in_tz
+from ppbot.daily_storage import DailyRegistry
+from ppbot.daily_service import (
+    add_member,
+    move_member,
+    remove_member,
+    set_daily_time,
+    set_leader_today,
+    skip_today,
+    substitute_today,
+    update_settings,
+    workday_predicate,
 )
 from ppbot.game import GameRegistry
 from ppbot.daily_ui import (
@@ -47,8 +46,6 @@ from ppbot.daily_ui import (
     PREFIX_TIME,
     PREFIX_VACPLAN,
     PREFIX_WHO,
-    _ensure_today_schedule,
-    _schedule_leader,
     build_cost_remind_settings_markup,
     build_member_picker_markup,
     show_menu,
@@ -58,8 +55,6 @@ from ppbot.daily_ui import (
     show_team,
     who_reply,
 )
-
-TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
 class AddMember(StatesGroup):
@@ -94,11 +89,6 @@ def _resolve_member(members: List[DailyMember], text: str) -> Optional[DailyMemb
         if stripped in m.username:
             return m
     return None
-
-
-async def _refresh_schedule(daily: DailyRegistry, chat_id: int, tz, workdays=None) -> None:
-    """Recompute the persisted 14-day leader window after a roster change."""
-    await refresh_schedule_window(daily, chat_id, today_in_tz(tz), workdays=workdays)
 
 
 # Message ids of the bot's /daily menu messages per chat. On the next /daily
@@ -203,47 +193,36 @@ def create_router() -> Router:
     async def move_member_callback(callback: CallbackQuery, daily: DailyRegistry, tz, workdays=None):
         payload = callback.data[len(PREFIX_MOVE):]
         pos_s, direction = payload.rsplit(":", 1)
-        moved = await daily.move_member(
-            callback.message.chat.id, int(pos_s), -1 if direction == "up" else 1
+        result = await move_member(
+            daily,
+            callback.message.chat.id,
+            int(pos_s),
+            direction,
+            today_in_tz(tz),
+            workdays=workday_predicate(workdays),
         )
-        if moved:
-            wd = workdays.is_workday if workdays is not None else None
-            await _refresh_schedule(daily, callback.message.chat.id, tz, workdays=wd)
-        if moved:
-            await callback.answer("Порядок обновлён")
-        elif direction == "up":
-            await callback.answer("Уже в начале")
-        else:
-            await callback.answer("Уже в конце")
+        await callback.answer(result.message)
         await show_reorder(callback.message, daily, tz, edit=True)
 
     @r.callback_query(F.data.regexp(r"^{}(.+)$".format(PREFIX_REMOVE)))
     async def remove_member_callback(callback: CallbackQuery, daily: DailyRegistry, tz, workdays=None):
         position = int(callback.data[len(PREFIX_REMOVE):])
-        await daily.remove_member(callback.message.chat.id, position)
-        chat = await daily.get_chat(callback.message.chat.id)
-        if chat is None:
-            chat = DailyChat(chat_id=callback.message.chat.id)
-            await daily.upsert_chat(chat)
-        wd = workdays.is_workday if workdays is not None else None
-        await _refresh_schedule(daily, callback.message.chat.id, tz, workdays=wd)
+        await remove_member(
+            daily,
+            callback.message.chat.id,
+            position,
+            today_in_tz(tz),
+            workdays=workday_predicate(workdays),
+        )
         await show_remove_list(callback.message, daily, tz, edit=True)
         await callback.answer()
 
     @r.message(AddMember.waiting)
     async def add_member_input(message: Message, state: FSMContext, daily: DailyRegistry, tz, workdays=None):
         chat_id = message.chat.id
-        members = await daily.get_members(chat_id)
         text = (message.text or "").strip()
         if not text:
             await message.answer("Пришлите имя участника (например: «Иван @ivanov») или ответьте на его сообщение")
-            return
-
-        # Check for duplicates
-        existing = [m for m in members if m.username == text]
-        if existing:
-            await message.answer("Уже в команде")
-            await state.clear()
             return
 
         # Adding by replying to a member's message captures their Telegram id,
@@ -252,22 +231,21 @@ def create_router() -> Router:
         replied = message.reply_to_message.from_user if message.reply_to_message else None
         if replied is not None and not replied.is_bot:
             user_id = replied.id
-            if any(m.user_id == user_id for m in members):
-                await message.answer("Уже в команде")
+
+        result = await add_member(
+            daily,
+            chat_id,
+            text,
+            user_id,
+            today_in_tz(tz),
+            workdays=workday_predicate(workdays),
+        )
+        if not result.ok:
+            await message.answer(result.message)
+            if result.message == "Уже в команде":
                 await state.clear()
-                return
+            return
 
-        new_member = DailyMember(chat_id=chat_id, position=len(members), username=text, user_id=user_id)
-
-        new_member.chat_id = chat_id
-        new_member.position = len(members)
-        await daily.add_member(new_member)
-        chat = await daily.get_chat(chat_id)
-        if chat is None:
-            chat = DailyChat(chat_id=chat_id)
-            await daily.upsert_chat(chat)
-        wd = workdays.is_workday if workdays is not None else None
-        await _refresh_schedule(daily, chat_id, tz, workdays=wd)
         await state.clear()
         await show_team(message, daily, tz)
 
@@ -284,17 +262,12 @@ def create_router() -> Router:
 
     @r.message(SetTime.waiting)
     async def time_input(message: Message, state: FSMContext, daily: DailyRegistry):
-        text = (message.text or "").strip()
-        if not TIME_RE.match(text):
-            await message.answer("Неверный формат. Пришлите время в формате ЧЧ:ММ")
+        result = await set_daily_time(daily, message.chat.id, message.text or "")
+        if not result.ok:
+            await message.answer(result.message)
             return
-        chat = await daily.get_chat(message.chat.id)
-        if chat is None:
-            chat = DailyChat(chat_id=message.chat.id)
-        chat.daily_time = text
-        await daily.upsert_chat(chat)
         await state.clear()
-        await message.answer("Время дейлика: {}".format(text))
+        await message.answer(result.message)
 
     @r.callback_query(F.data == PREFIX_WHO)
     async def who_callback(callback: CallbackQuery, daily: DailyRegistry, tz, workdays=None):
@@ -309,80 +282,46 @@ def create_router() -> Router:
 
     @r.message(Command("substitute"))
     async def substitute_command(message: Message, daily: DailyRegistry, tz, workdays=None):
-        chat = await daily.get_chat(message.chat.id)
         members = await daily.get_members(message.chat.id)
         if not members:
             await message.answer("Команда пуста. Добавьте участников через /team")
             return
-        if chat is None:
-            chat = DailyChat(chat_id=message.chat.id)
-        today = today_in_tz(tz)
-        wd = workdays.is_workday if workdays is not None else None
-        schedule = await _ensure_today_schedule(daily, chat, members, today, workdays=wd)
-        leader = await _schedule_leader(schedule, members, str(today))
-        if leader is None:
-            await message.answer("Все пропущены сегодня")
-            return
-        other_s = next_scheduled_date(schedule, str(today))
-        if other_s is None:
-            await message.answer("Некого подменять")
-            return
-        b_pos, a_pos, msg, err = apply_substitute(schedule, members, str(today), other_s)
-        if err is not None:
-            await message.answer(err)
-            return
-        await daily.swap_schedule_dates(message.chat.id, str(today), other_s)
-        chat.next_index = b_pos
-        await daily.upsert_chat(chat)
-        await message.answer(msg)
+        result = await substitute_today(
+            daily,
+            message.chat.id,
+            today_in_tz(tz),
+            workdays=workday_predicate(workdays),
+        )
+        await message.answer(result.message)
 
     @r.callback_query(F.data.regexp(r"^{}(\d+)$".format(PREFIX_SUB)))
     async def substitute_callback(callback: CallbackQuery, daily: DailyRegistry, tz, workdays=None):
-        chat = await daily.get_chat(callback.message.chat.id)
-        members = await daily.get_members(callback.message.chat.id)
-        if not members:
-            await callback.answer("Команда пуста")
+        result = await substitute_today(
+            daily,
+            callback.message.chat.id,
+            today_in_tz(tz),
+            workdays=workday_predicate(workdays),
+        )
+        if not result.ok:
+            await callback.answer(result.message)
             return
-        if chat is None:
-            chat = DailyChat(chat_id=callback.message.chat.id)
-        today = today_in_tz(tz)
-        wd = workdays.is_workday if workdays is not None else None
-        schedule = await _ensure_today_schedule(daily, chat, members, today, workdays=wd)
-        other_s = next_scheduled_date(schedule, str(today))
-        if other_s is None:
-            await callback.answer("Некого подменять")
-            return
-        b_pos, a_pos, msg, err = apply_substitute(schedule, members, str(today), other_s)
-        if err is not None:
-            await callback.answer(err)
-            return
-        await daily.swap_schedule_dates(callback.message.chat.id, str(today), other_s)
-        chat.next_index = b_pos
-        await daily.upsert_chat(chat)
-        await callback.message.edit_text(msg)
+        await callback.message.edit_text(result.message)
         await callback.answer()
 
     @r.callback_query(F.data.regexp(r"^{}(\d+)$".format(PREFIX_SKIP)))
     async def skip_callback(callback: CallbackQuery, daily: DailyRegistry, tz, workdays=None):
         position = int(callback.data[len(PREFIX_SKIP):])
-        chat = await daily.get_chat(callback.message.chat.id)
-        members = await daily.get_members(callback.message.chat.id)
-        today = str(today_in_tz(tz))
-        if chat is None or not members:
-            await callback.answer("Команда пуста")
+        result = await skip_today(
+            daily,
+            callback.message.chat.id,
+            position,
+            today_in_tz(tz),
+            workdays=workday_predicate(workdays),
+        )
+        if not result.ok:
+            await callback.answer(result.message)
             return
-        new_members, new_next, new_leader, msg = apply_skip(members, chat.next_index, position, today)
-        await daily.replace_members(callback.message.chat.id, new_members)
-        chat.next_index = new_next
-        await daily.upsert_chat(chat)
-        wd = workdays.is_workday if workdays is not None else None
-        await _refresh_schedule(daily, callback.message.chat.id, tz, workdays=wd)
-        if new_leader is None:
-            await callback.message.edit_text("Все пропущены сегодня, дейлик отменён")
-        else:
-            await callback.message.edit_text(
-                "Пропуск принят. Сегодня ведёт {}".format(new_leader.get_display_name(today))
-            )
+        await callback.message.edit_text(result.message)
         await callback.answer()
 
     @r.callback_query(F.data == PREFIX_HELP)
@@ -431,23 +370,17 @@ def create_router() -> Router:
     @r.callback_query(F.data.regexp(r"^{}(\d+)$".format(PREFIX_LEAD)))
     async def leader_callback(callback: CallbackQuery, daily: DailyRegistry, tz, workdays=None):
         position = int(callback.data[len(PREFIX_LEAD):])
-        chat = await daily.get_chat(callback.message.chat.id)
-        members = await daily.get_members(callback.message.chat.id)
-        today = str(today_in_tz(tz))
-        if chat is None:
-            chat = DailyChat(chat_id=callback.message.chat.id)
-        new_next, err = set_leader(members, chat.next_index, position, today)
-        if err is not None:
-            await callback.answer(err)
-            return
-        chat.next_index = new_next
-        await daily.upsert_chat(chat)
-        wd = workdays.is_workday if workdays is not None else None
-        await _refresh_schedule(daily, callback.message.chat.id, tz, workdays=wd)
-        chosen = next((m for m in members if m.position == position), None)
-        await callback.message.edit_text(
-            "Сегодня ведёт {}".format(chosen.get_display_name(today) if chosen else "")
+        result = await set_leader_today(
+            daily,
+            callback.message.chat.id,
+            position,
+            today_in_tz(tz),
+            workdays=workday_predicate(workdays),
         )
+        if not result.ok:
+            await callback.answer(result.message)
+            return
+        await callback.message.edit_text(result.message)
         await callback.answer()
 
     @r.message(Command("setleader"))
@@ -456,9 +389,6 @@ def create_router() -> Router:
         if not members:
             await message.answer("Команда пуста. Добавьте участников через /team")
             return
-        chat = await daily.get_chat(message.chat.id)
-        if chat is None:
-            chat = DailyChat(chat_id=message.chat.id)
         member = None
         if message.reply_to_message and message.reply_to_message.from_user:
             member = next(
@@ -471,16 +401,14 @@ def create_router() -> Router:
         if member is None:
             await message.answer("Не нашёл участника. Напишите /setleader @ник или ответьте на сообщение")
             return
-        today = str(today_in_tz(tz))
-        new_next, err = set_leader(members, chat.next_index, member.position, today)
-        if err is not None:
-            await message.answer(err)
-            return
-        chat.next_index = new_next
-        await daily.upsert_chat(chat)
-        wd = workdays.is_workday if workdays is not None else None
-        await _refresh_schedule(daily, message.chat.id, tz, workdays=wd)
-        await message.answer("Сегодня ведёт {}".format(member.get_display_name(today)))
+        result = await set_leader_today(
+            daily,
+            message.chat.id,
+            member.position,
+            today_in_tz(tz),
+            workdays=workday_predicate(workdays),
+        )
+        await message.answer(result.message)
 
     # ---- vacation ----
 
@@ -531,16 +459,17 @@ def create_router() -> Router:
 
     @r.message(SetCostReminderTime.waiting)
     async def cost_remind_time_input(message: Message, state: FSMContext, daily: DailyRegistry):
-        text = (message.text or "").strip()
-        if not TIME_RE.match(text):
-            await message.answer("Неверный формат. Пришлите время в формате ЧЧ:ММ")
+        result = await update_settings(
+            daily,
+            message.chat.id,
+            cost_reminder_time=message.text or "",
+        )
+        if not result.ok:
+            await message.answer(result.message)
             return
-        chat = await daily.get_chat(message.chat.id)
-        if chat is None:
-            chat = DailyChat(chat_id=message.chat.id)
-        chat.cost_reminder_time = text
-        await daily.upsert_chat(chat)
         await state.clear()
-        await message.answer("Время напоминания о трудозатратах: {}".format(text))
+        await message.answer(
+            "Время напоминания о трудозатратах: {}".format((message.text or "").strip())
+        )
 
     return r

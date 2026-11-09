@@ -825,7 +825,7 @@ def test_menu_markup_has_miniapp_button_without_url(monkeypatch):
         for btn in row
     ]
     # no mini-app button when no link can be built
-    assert not any(t == "📅 Отпуска (мини-апп)" for t, _, _ in flat)
+    assert not any(t == "📱 Приложение команды" for t, _, _ in flat)
     # planned vacations button is still there
     assert ("Запланир. отпуска", "daily:vacplan", None) in flat
 
@@ -844,7 +844,7 @@ def test_menu_markup_includes_miniapp_link_with_chat(monkeypatch):
         btn.url
         for row in markup.inline_keyboard
         for btn in row
-        if btn.text == "📅 Отпуска (мини-апп)"
+        if btn.text == "📱 Приложение команды"
     ]
     assert urls == ["https://bot.example.com:8443?chat=-1001234567890"]
 
@@ -861,7 +861,7 @@ def test_menu_markup_uses_main_miniapp_deeplink(monkeypatch):
         btn.url
         for row in markup.inline_keyboard
         for btn in row
-        if btn.text == "📅 Отпуска (мини-апп)"
+        if btn.text == "📱 Приложение команды"
     ]
     assert urls == ["https://t.me/ppbot?startapp=-1001234567890"]
     configure_webapp_bot(None)
@@ -877,7 +877,7 @@ def test_menu_markup_uses_named_miniapp_deeplink(monkeypatch):
         btn.url
         for row in markup.inline_keyboard
         for btn in row
-        if btn.text == "📅 Отпуска (мини-апп)"
+        if btn.text == "📱 Приложение команды"
     ]
     assert urls == ["https://t.me/ppbot/vacations?startapp=-1001"]
     configure_webapp_bot(None)

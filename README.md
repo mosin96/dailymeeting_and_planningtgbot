@@ -49,20 +49,25 @@ The `/daily` menu also has these quick-action buttons:
 - **«Выбрать ведущего»** — opens a member picker to manually set today's leader.
 - **«Запланир. отпуска»** — planned vacations view (also available via `/vacplan`).
 - **«Напомн. о трудозатратах»** — opens a settings menu for work-hours logging reminders: a toggle to enable/disable (`/costremind`) and a reminder time (default 17:00). On the last workday of the week the bot sends «Не забудьте списать трудозатраты за неделю! Хороших выходных!», and on the last workday of the month «Не забудьте списать трудозатраты за месяц!» (last workday determined via the public-holidays calendar, date.nager.at).
-- **«📅 Отпуска (мини-апп)»** — opens the mini-app vacation calendar (shown when the bot username is known at startup, see the Mini-app section).
+- **«📱 Приложение команды»** — opens the team mini-app: daily status/quick actions, the team roster, the vacation calendar and settings (shown when the bot username is known at startup, see the Mini-app section).
 
-### Vacation calendar mini-app
+### Team mini-app
 
-Vacations are managed in a Telegram mini-app (WebApp): open the `/daily` menu in the team chat and tap **«📅 Отпуска (мини-апп)»**. The app shows the team members (as colored chips) and a month calendar:
+The Telegram mini-app (WebApp) is the control center for the daily standup. Open the `/daily` menu in the team chat and tap **«📱 Приложение команды»**. The app opens on the **«Дейлик»** tab:
 
-- Each member has a color; vacations are drawn as colored bars in the day cells of the range (inclusive).
-- Team members are shown in a collapsible dropdown with **multi-select**: any combination of members can be displayed at once (the «Все» button selects everyone, «Сбросить выбор» clears the selection). By default the member who opened the app is selected, and the **«Я»** button quickly switches back to only your own vacations.
-- To add a vacation: make sure exactly one member is selected (or press «Я»), tap the first day, then the last day (today or later). Nothing is saved yet — press the **«Добавить отпуск»** button and confirm in the popup. If a range is already selected, tapping another day starts a new range from that day. The selected start is kept when you switch months, so a vacation can start in one month and end in another.
-- Under the button there is a list of **all vacations of the selected members** (name, color, period), each with a **✕** button to delete it.
-- To remove from the calendar: tap the colored bar of the vacation and confirm in the popup.
-- Hovering a day shows a tooltip with **everyone from the team who is on vacation that day** (name, color, vacation period; members hidden by the current selection are marked «скрыт»). On touch devices the same tooltip appears on a long press.
+- **«Дейлик»** — daily time, member count, today's leader, tomorrow's leader, vacations today, non-working day and the next daily. Buttons «Подмените меня», «Пропуск» and «Выбрать ведущего» do the same as the chat buttons/commands.
+- **«Команда»** — the roster with vacations and the current Telegram binding; add a member by `Имя @username`, add yourself (your Telegram id is stored), remove a member, move members with ⬆️/⬇️. Adding by replying to a message remains chat-only because the WebApp has no reply context.
+- **«Отпуска»** — the full vacation calendar plus a list of planned vacations (the `/vacplan` view):
+  - Each member has a color; vacations are drawn as colored bars in the day cells of the range (inclusive).
+  - Team members are shown in a collapsible dropdown with **multi-select**: any combination of members can be displayed at once (the «Все» button selects everyone, «Сбросить выбор» clears the selection). By default the member who opened the app is selected, and the **«Я»** button quickly switches back to only your own vacations.
+  - To add a vacation: make sure exactly one member is selected (or press «Я»), tap the first day, then the last day (today or later). Nothing is saved yet — press the **«Добавить отпуск»** button and confirm in the popup. If a range is already selected, tapping another day starts a new range from that day. The selected start is kept when you switch months, so a vacation can start in one month and end in another.
+  - Under the button there is a list of **all vacations of the selected members** (name, color, period), each with a **✕** button to delete it.
+  - To remove from the calendar: tap the colored bar of the vacation and confirm in the popup.
+  - Hovering a day shows a tooltip with **everyone from the team who is on vacation that day** (name, color, vacation period; members hidden by the current selection are marked «скрыт»). On touch devices the same tooltip appears on a long press.
+- **«Настройки»** — daily time (`/time`), work-hours reminder toggle/time (`/costremind`) and the help text (`/help`). Reminder messages themselves are still sent only to the chat; the mini-app does not use push notifications or service workers.
+- `/reset` and planning poker (`/poker`, `/voteban`) intentionally remain chat-only.
 
-Any member of the daily standup roster can view and edit vacations. Every edit (add/remove) instantly rebuilds the daily rotation schedule, so `/who`, reminders and the calendar stay in sync.
+Any member of the daily standup roster can view and change the daily, team, settings and vacations. Every edit (roster, rotation, leader, vacation) instantly rebuilds the daily rotation schedule, so `/who`, reminders, chat menus and the mini-app stay in sync.
 
 How authorization works (`403 Вы не участник этой команды`):
 
@@ -72,8 +77,9 @@ How authorization works (`403 Вы не участник этой команды
    - if the roster row has a Telegram id (member added via reply to their message), it must match the id from `initData`;
    - rows added manually by `@username` have no id, so they are matched by the signed `@username` from `initData`, and the numeric id is bound to the row on first open (after that the id alone is used, so a later username change does not lock the person out).
    - a row already bound to another Telegram id is never taken over by a username match.
+4. The only exception is the **«Добавить себя»** action: a chat member who is not in `/team` yet may add themselves. Since the roster cannot authorize a person who is not there, the server checks membership in the Telegram chat through the Bot API (`getChatMember`) before creating the roster row.
 
-Members added as an arbitrary name without `@username` (e.g. just «Иван») cannot be matched automatically. To grant them access, remove and re-add them via `/team` with `@username` or by replying to their message — the reply flow stores the Telegram id immediately.
+Members added as an arbitrary name without `@username` (e.g. just «Иван») cannot be matched automatically. To grant them access, remove and re-add them via `/team` with `@username` or by replying to their message — the reply flow stores the Telegram id immediately. They can also add themselves from the mini-app.
 
 #### Mini-app deployment (HTTPS)
 

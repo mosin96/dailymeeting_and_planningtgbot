@@ -123,7 +123,7 @@ def build_menu_markup(chat_id: int) -> InlineKeyboardMarkup:
     ]
     webapp_url = _webapp_chat_url(chat_id)
     if webapp_url:
-        rows.append([InlineKeyboardButton(text="📅 Отпуска (мини-апп)", url=webapp_url)])
+        rows.append([InlineKeyboardButton(text="📱 Приложение команды", url=webapp_url)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -417,7 +417,7 @@ GREETING_HELP = (
     "/who — кто сегодня ведёт\n"
     "/substitute — подменить ведущего\n"
     "/setleader @ник — назначить ведущего на сегодня\n"
-    "📅 Отпуска — через мини-апп (кнопка «Отпуска» в меню /daily)\n"
+    "📱 Приложение команды — дейлик, команда, отпуска и настройки (кнопка «Приложение команды» в меню /daily)\n"
     "/costremind — напоминания о списании трудозатрат (вкл/выкл, время)\n"
     "/vacplan — запланированные отпуска\n"
     "/reset — сбросить историю бота для чата (двойное подтверждение)\n"

@@ -1,4 +1,4 @@
-/* Team vacation calendar mini-app. Vanilla JS, no frameworks. */
+/* Team daily standup + vacation calendar mini-app. Vanilla JS, no frameworks. */
 (function () {
   "use strict";
 
@@ -37,6 +37,10 @@
     today: null,          // ISO string from the server
     members: [],
     me: null,             // position of the member who opened the app
+    settings: {},
+    daily: null,
+    plannedVacations: [],
+    helpText: "",
     selected: [],         // positions shown on the calendar (multi-select)
     selectionInitialized: false,
     selectionCleared: false,
@@ -46,6 +50,8 @@
     selStart: null,       // ISO string
     selEnd: null
   };
+
+  var activeTab = "daily";
 
   var chatId = (function () {
     var fromStart = "";
@@ -91,6 +97,13 @@
 
   function setHint(msg) { $("hint").textContent = msg; }
 
+  function defaultTabHint(name) {
+    if (name === "daily") return "Статус дейлика и быстрые действия.";
+    if (name === "team") return "Добавляйте участников и меняйте порядок ротации.";
+    if (name === "settings") return "Настройки действуют на весь чат.";
+    return defaultHint();
+  }
+
   function defaultHint() {
     if (state.selected.length === 1) {
       return "Показаны отпуска: " + memberName(state.selected[0]) + ". Нажмите на день, чтобы добавить отпуск.";
@@ -105,7 +118,7 @@
       headers: { "X-Telegram-Init-Data": initHeader }
     })
       .then(function (r) {
-        if (r.status === 401) throw new Error("Откройте календарь кнопкой «Отпуска» в чате Telegram");
+        if (r.status === 401) throw new Error("Откройте приложение кнопкой «Приложение команды» в чате Telegram");
         if (r.status === 403) throw new Error("Вы не участник этой команды");
         if (!r.ok) throw new Error("Ошибка сервера " + r.status);
         return r.json();
@@ -114,6 +127,10 @@
         state.today = data.today;
         state.members = data.members;
         state.me = data.me && typeof data.me.position === "number" ? data.me.position : null;
+        state.settings = data.settings || {};
+        state.daily = data.daily || null;
+        state.plannedVacations = data.planned_vacations || [];
+        state.helpText = data.help || "";
         if (!state.selectionInitialized) {
           // Default: the member who opened the app is selected.
           state.selectionInitialized = true;
@@ -139,8 +156,14 @@
         renderMembers();
         renderCalendar();
         updateUi();
+        renderDaily();
+        renderTeam();
+        renderSettings();
+        renderPlannedVacations();
         if (hintAfter) setHint(hintAfter);
-        else if (!state.selStart) setHint(defaultHint());
+        else if (activeTab === "vacations") {
+          if (!state.selStart) setHint(defaultHint());
+        } else setHint(defaultTabHint(activeTab));
       })
       .catch(function (err) { setHint(err.message || "Не удалось загрузить данные"); });
   }
@@ -722,10 +745,336 @@
     hideDayTooltip();
   });
 
+  /* ---------- daily / team / settings views ---------- */
+
+  var TABS = ["daily", "team", "vacations", "settings"];
+
+  function showTab(name) {
+    if (TABS.indexOf(name) === -1) name = "daily";
+    activeTab = name;
+    TABS.forEach(function (tab) {
+      $("view-" + tab).classList.toggle("hidden", tab !== name);
+      var btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
+      if (btn) btn.classList.toggle("active", tab === name);
+    });
+    if (name === "vacations") {
+      renderCalendar();
+      if (!state.selStart) setHint(defaultHint());
+    } else {
+      if (name === "daily") renderDaily();
+      else if (name === "team") renderTeam();
+      else if (name === "settings") renderSettings();
+      setHint(defaultTabHint(name));
+    }
+  }
+
+  function actionRequest(method, url, body, successMessage) {
+    var payload = body ? Object.assign({}, body) : null;
+    if (payload && payload.chat === undefined) payload.chat = Number(chatId);
+    return apiCall(method, url, payload || undefined)
+      .then(function (resp) {
+        if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("medium");
+        var msg = resp && resp.message ? resp.message : successMessage;
+        loadState(msg);
+        return resp;
+      })
+      .catch(function (err) {
+        setHint(err.message || "Не удалось выполнить действие");
+      });
+  }
+
+  function activeVacation(member, iso) {
+    var day = iso || state.today;
+    var found = null;
+    member.vacations.forEach(function (v) {
+      var from = v.start === null ? "0000-01-01" : v.start;
+      if (day >= from && day <= v.end) {
+        if (!found || v.end < found.end) found = v;
+      }
+    });
+    return found;
+  }
+
+  function vacationsToday() {
+    if (state.daily && state.daily.vacations_today) return state.daily.vacations_today;
+    var result = [];
+    state.members.forEach(function (m) {
+      var v = activeVacation(m);
+      if (v) result.push({ position: m.position, name: m.name, until: v.end });
+    });
+    return result;
+  }
+
+  function renderDaily() {
+    var d = state.daily || {};
+    var settings = state.settings || {};
+    var count = d.members_count !== undefined ? d.members_count : state.members.length;
+    var available = d.available_count !== undefined ? d.available_count : count;
+    var lines = [];
+    lines.push("🕙 Время: " + (settings.daily_time || "—"));
+    lines.push("👥 Участников: " + (available < count ? available + " из " + count : String(available)));
+
+    var vacs = vacationsToday();
+    if (vacs.length) {
+      lines.push("В отпуске: " + vacs.map(function (v) {
+        return v.name + " (до " + ruDate(v.until) + ")";
+      }).join(", "));
+    }
+
+    if (d.is_workday === false) {
+      lines.push("🚫 Сегодня нерабочий день, дейлика нет");
+      if (d.next_daily_date) {
+        var next = "📅 Ближайший дейлик: " + ruDate(d.next_daily_date);
+        if (d.next_daily_leader_name) next += ", ведёт " + d.next_daily_leader_name;
+        lines.push(next);
+      }
+    } else {
+      lines.push("👤 Сегодня ведёт: " + (d.leader_name || "—"));
+      if (!d.leader_name) lines.push("Все пропущены сегодня");
+      if (d.tomorrow_name) lines.push("Завтра ведёт " + d.tomorrow_name);
+    }
+    $("daily-summary").textContent = lines.join("\n");
+
+    var box = $("daily-vacations");
+    box.innerHTML = "";
+    if (!vacs.length) {
+      var empty = document.createElement("div");
+      empty.className = "vacation-empty";
+      empty.textContent = "Сегодня никто не в отпуске.";
+      box.appendChild(empty);
+    } else {
+      vacs.forEach(function (v) {
+        var row = document.createElement("div");
+        row.className = "vacation-row";
+        var dot = document.createElement("span");
+        dot.className = "dot";
+        dot.style.background = colorOf(v.position);
+        var name = document.createElement("span");
+        name.className = "v-name";
+        name.textContent = v.name;
+        var period = document.createElement("span");
+        period.className = "v-period";
+        period.textContent = "до " + ruDate(v.until);
+        row.appendChild(dot);
+        row.appendChild(name);
+        row.appendChild(period);
+        box.appendChild(row);
+      });
+    }
+
+    var noLeader = d.leader_position === null || d.leader_position === undefined;
+    var disabled = d.is_workday === false || noLeader;
+    $("substitute-btn").disabled = disabled;
+    $("skip-btn").disabled = disabled;
+    $("choose-leader-btn").disabled = state.members.length === 0;
+  }
+
+  function renderTeam() {
+    var box = $("team-list");
+    box.innerHTML = "";
+    $("add-self-btn").disabled = state.me !== null;
+    if (!state.members.length) {
+      var empty = document.createElement("div");
+      empty.className = "vacation-empty";
+      empty.textContent = "Команда пуста. Добавьте первого участника.";
+      box.appendChild(empty);
+      return;
+    }
+    state.members.forEach(function (m, index) {
+      var row = document.createElement("div");
+      row.className = "team-row";
+
+      var moves = document.createElement("div");
+      moves.className = "move-buttons";
+
+      var up = document.createElement("button");
+      up.className = "icon-btn";
+      up.textContent = "⬆️";
+      up.disabled = index === 0;
+      up.addEventListener("click", function () {
+        actionRequest("POST", "/api/members/" + m.position + "/move", { direction: "up" }, "Порядок обновлён");
+      });
+
+      var down = document.createElement("button");
+      down.className = "icon-btn";
+      down.textContent = "⬇️";
+      down.disabled = index === state.members.length - 1;
+      down.addEventListener("click", function () {
+        actionRequest("POST", "/api/members/" + m.position + "/move", { direction: "down" }, "Порядок обновлён");
+      });
+
+      moves.appendChild(up);
+      moves.appendChild(down);
+
+      var name = document.createElement("span");
+      name.className = "name";
+      var label = m.name + (m.position === state.me ? " (я)" : "");
+      var vac = activeVacation(m);
+      if (vac) label += " — в отпуске до " + ruDate(vac.end);
+      name.textContent = label;
+
+      var del = document.createElement("button");
+      del.className = "v-del";
+      del.textContent = "✕";
+      del.setAttribute("aria-label", "Удалить участника");
+      del.addEventListener("click", function () {
+        showPopup("Удалить участника", m.name, "Удалить", function () {
+          actionRequest(
+            "DELETE",
+            "/api/members/" + m.position + "?chat=" + encodeURIComponent(chatId),
+            null,
+            "Участник удалён"
+          );
+        }, true);
+      });
+
+      row.appendChild(moves);
+      row.appendChild(name);
+      row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+
+  function renderSettings() {
+    var s = state.settings || {};
+    $("daily-time-input").value = s.daily_time || "";
+    $("cost-time-input").value = s.cost_reminder_time || "";
+    $("cost-toggle-btn").textContent = s.cost_reminder_enabled ? "Выключить" : "Включить";
+    $("cost-reminder-state").textContent = s.cost_reminder_enabled
+      ? "Напоминания включены."
+      : "Напоминания выключены.";
+    $("help-text").textContent = state.helpText || "";
+  }
+
+  function renderPlannedVacations() {
+    var box = $("planned-list");
+    box.innerHTML = "";
+    if (!state.plannedVacations.length) {
+      var empty = document.createElement("div");
+      empty.className = "vacation-empty";
+      empty.textContent = "Нет запланированных отпусков.";
+      box.appendChild(empty);
+      return;
+    }
+    state.plannedVacations.forEach(function (v) {
+      var row = document.createElement("div");
+      row.className = "vacation-row";
+      var dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = colorOf(v.position);
+      var name = document.createElement("span");
+      name.className = "v-name";
+      name.textContent = v.name;
+      var period = document.createElement("span");
+      period.className = "v-period";
+      period.textContent = ruDate(v.start) + " – " + ruDate(v.end);
+      row.appendChild(dot);
+      row.appendChild(name);
+      row.appendChild(period);
+      box.appendChild(row);
+    });
+  }
+
+  /* ---------- leader chooser ---------- */
+
+  function showChoice(title, items, onPick) {
+    var list = $("choice-list");
+    list.innerHTML = "";
+    items.forEach(function (item) {
+      var btn = document.createElement("button");
+      btn.className = "choice-btn";
+      btn.textContent = item.label;
+      btn.addEventListener("click", function () {
+        hideChoice();
+        onPick(item);
+      });
+      list.appendChild(btn);
+    });
+    $("choice-title").textContent = title;
+    $("choice").classList.remove("hidden");
+  }
+
+  function hideChoice() { $("choice").classList.add("hidden"); }
+
+  function chooseLeader() {
+    if (!state.members.length) {
+      setHint("Команда пуста. Добавьте участников.");
+      return;
+    }
+    showChoice(
+      "Кто сегодня ведёт?",
+      state.members.map(function (m) {
+        return { label: m.name, position: m.position };
+      }),
+      function (item) {
+        actionRequest("POST", "/api/daily/leader", { position: item.position }, "Ведущий выбран");
+      }
+    );
+  }
+
+  /* ---------- form actions ---------- */
+
+  function saveTimeSetting(inputId, field, successMessage) {
+    var value = ($(inputId).value || "").trim();
+    if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(value)) {
+      setHint("Неверный формат. Пришлите время в формате ЧЧ:ММ");
+      return;
+    }
+    var payload = {};
+    payload[field] = value;
+    actionRequest("PUT", "/api/settings", payload, successMessage);
+  }
+
+  $("tabs").addEventListener("click", function (ev) {
+    var btn = ev.target.closest(".tab-btn");
+    if (btn) showTab(btn.dataset.tab);
+  });
+
+  $("substitute-btn").addEventListener("click", function () {
+    actionRequest("POST", "/api/daily/substitute", {}, "Подмена выполнена");
+  });
+  $("skip-btn").addEventListener("click", function () {
+    var position = state.daily && state.daily.leader_position;
+    actionRequest("POST", "/api/daily/skip", { position: position }, "Пропуск принят");
+  });
+  $("choose-leader-btn").addEventListener("click", chooseLeader);
+
+  $("add-self-btn").addEventListener("click", function () {
+    actionRequest("POST", "/api/members", { mode: "self" }, "Вы добавлены в команду");
+  });
+  $("add-member-btn").addEventListener("click", function () {
+    var input = $("member-name");
+    var name = (input.value || "").trim();
+    if (!name) {
+      setHint("Введите имя участника (например: «Иван @ivanov»)");
+      return;
+    }
+    actionRequest("POST", "/api/members", { name: name }, "Участник добавлен");
+    input.value = "";
+  });
+
+  $("save-time-btn").addEventListener("click", function () {
+    saveTimeSetting("daily-time-input", "daily_time", "Время дейлика сохранено");
+  });
+  $("save-cost-time-btn").addEventListener("click", function () {
+    saveTimeSetting("cost-time-input", "cost_reminder_time", "Время напоминания сохранено");
+  });
+  $("cost-toggle-btn").addEventListener("click", function () {
+    var enabled = !(state.settings && state.settings.cost_reminder_enabled);
+    actionRequest("PUT", "/api/settings", { cost_reminder_enabled: enabled }, "Настройка сохранена");
+  });
+
+  $("choice-cancel").addEventListener("click", hideChoice);
+  $("choice").addEventListener("click", function (ev) {
+    if (ev.target === $("choice")) hideChoice();
+  });
+
+  showTab("daily");
+
   if (!chatId) {
-    setHint("Откройте календарь из чата команды (кнопка «Отпуска» в меню /daily)");
+    setHint("Откройте приложение из чата команды (кнопка «Приложение команды» в меню /daily)");
   } else if (!initHeader) {
-    setHint("Откройте календарь из Telegram — без initData сервер не пустит. Прямая ссылка в браузере не подходит.");
+    setHint("Откройте приложение из Telegram — без initData сервер не пустит. Прямая ссылка в браузере не подходит.");
   } else {
     loadState();
   }

@@ -3,50 +3,124 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Отпуска команды</title>
+<title>Приложение команды</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header class="topbar">
-  <button id="prev-month" class="nav-btn" aria-label="Предыдущий месяц">‹</button>
-  <div id="month-title" class="month-title">—</div>
-  <button id="next-month" class="nav-btn" aria-label="Следующий месяц">›</button>
-</header>
+<nav class="tabs" id="tabs">
+  <button class="tab-btn active" data-tab="daily">Дейлик</button>
+  <button class="tab-btn" data-tab="team">Команда</button>
+  <button class="tab-btn" data-tab="vacations">Отпуска</button>
+  <button class="tab-btn" data-tab="settings">Настройки</button>
+</nav>
+<div id="hint" class="hint">Открываем приложение…</div>
 
-<div class="member-bar">
-  <button id="members-toggle" class="picker-toggle" aria-expanded="false">
-    <span class="dot" id="members-dot"></span>
-    <span id="members-label">Участники</span>
-    <span class="caret">▾</span>
-  </button>
-  <button id="me-btn" class="me-btn" title="Показать только мои отпуска">Я</button>
-</div>
-<div id="members-panel" class="members-panel hidden">
-  <div id="members-list" class="members-list"></div>
-  <div class="members-actions members-actions-reset">
-    <button id="members-reset" class="secondary small">Сбросить выбор</button>
+<section id="view-daily" class="view">
+  <div class="card">
+    <div class="card-title">📋 Дейлик</div>
+    <div id="daily-summary" class="daily-summary">Загрузка…</div>
   </div>
-  <div class="members-actions">
-    <button id="members-all" class="secondary small">Все</button>
-    <button id="members-done" class="primary small">Готово</button>
+  <div class="daily-actions">
+    <button id="substitute-btn" class="secondary">Подмените меня</button>
+    <button id="skip-btn" class="secondary">Пропуск</button>
+    <button id="choose-leader-btn" class="primary">Выбрать ведущего</button>
   </div>
-</div>
-<div id="hint" class="hint">Открываем календарь…</div>
-
-<div class="calendar">
-  <div class="grid weekdays" id="weekdays"></div>
-  <div class="grid days" id="days"></div>
-</div>
-
-<div class="footer">
-  <button id="add-btn" class="primary" disabled>Добавить отпуск</button>
-
-  <div class="vacations">
-    <div class="vacations-title">Отпуска выбранных участников</div>
-    <div id="vacations-list" class="vacations-list"></div>
+  <div class="card">
+    <div class="card-title">Кто в отпуске сегодня</div>
+    <div id="daily-vacations" class="vacations-list"></div>
   </div>
-</div>
+</section>
+
+<section id="view-team" class="view hidden">
+  <div class="card">
+    <div class="card-title">👥 Состав команды</div>
+    <div id="team-list" class="team-list"></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Добавить участника</div>
+    <input id="member-name" class="text-input" placeholder="Иван @ivanov" autocomplete="off">
+    <div class="actions-row">
+      <button id="add-member-btn" class="primary">Добавить</button>
+      <button id="add-self-btn" class="secondary">Добавить себя</button>
+    </div>
+    <div class="note">При добавлении себя сохраняется ваш Telegram id. Добавление ответом на сообщение доступно в чате.</div>
+  </div>
+</section>
+
+<section id="view-vacations" class="view hidden">
+  <header class="topbar">
+    <button id="prev-month" class="nav-btn" aria-label="Предыдущий месяц">‹</button>
+    <div id="month-title" class="month-title">—</div>
+    <button id="next-month" class="nav-btn" aria-label="Следующий месяц">›</button>
+  </header>
+
+  <div class="member-bar">
+    <button id="members-toggle" class="picker-toggle" aria-expanded="false">
+      <span class="dot" id="members-dot"></span>
+      <span id="members-label">Участники</span>
+      <span class="caret">▾</span>
+    </button>
+    <button id="me-btn" class="me-btn" title="Показать только мои отпуска">Я</button>
+  </div>
+  <div id="members-panel" class="members-panel hidden">
+    <div id="members-list" class="members-list"></div>
+    <div class="members-actions members-actions-reset">
+      <button id="members-reset" class="secondary small">Сбросить выбор</button>
+    </div>
+    <div class="members-actions">
+      <button id="members-all" class="secondary small">Все</button>
+      <button id="members-done" class="primary small">Готово</button>
+    </div>
+  </div>
+
+  <div class="calendar">
+    <div class="grid weekdays" id="weekdays"></div>
+    <div class="grid days" id="days"></div>
+  </div>
+
+  <div class="footer">
+    <button id="add-btn" class="primary" disabled>Добавить отпуск</button>
+
+    <div class="vacations">
+      <div class="vacations-title">Отпуска выбранных участников</div>
+      <div id="vacations-list" class="vacations-list"></div>
+    </div>
+
+    <div class="vacations planned">
+      <div class="vacations-title">Запланированные отпуска</div>
+      <div id="planned-list" class="vacations-list"></div>
+    </div>
+  </div>
+</section>
+
+<section id="view-settings" class="view hidden">
+  <div class="card">
+    <div class="card-title">Время дейлика</div>
+    <div class="actions-row">
+      <input id="daily-time-input" class="text-input" placeholder="ЧЧ:ММ" inputmode="numeric" autocomplete="off">
+      <button id="save-time-btn" class="primary small">Сохранить</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Напоминания о трудозатратах</div>
+    <div id="cost-reminder-state" class="note"></div>
+    <div class="actions-row">
+      <button id="cost-toggle-btn" class="secondary">Включить</button>
+    </div>
+    <div class="actions-row">
+      <input id="cost-time-input" class="text-input" placeholder="ЧЧ:ММ" inputmode="numeric" autocomplete="off">
+      <button id="save-cost-time-btn" class="primary small">Сохранить</button>
+    </div>
+    <div class="note">Сообщения приходят только в чат, в приложении пушей нет.</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Справка</div>
+    <pre id="help-text" class="help-text"></pre>
+  </div>
+</section>
 
 <div id="day-tooltip" class="day-tooltip hidden"></div>
 
@@ -57,6 +131,16 @@
     <div class="popup-actions">
       <button id="popup-cancel" class="secondary">Отмена</button>
       <button id="popup-ok" class="primary">ОК</button>
+    </div>
+  </div>
+</div>
+
+<div id="choice" class="popup hidden">
+  <div class="popup-card">
+    <div class="popup-title" id="choice-title"></div>
+    <div id="choice-list" class="choice-list"></div>
+    <div class="popup-actions">
+      <button id="choice-cancel" class="secondary">Отмена</button>
     </div>
   </div>
 </div>

@@ -40,7 +40,17 @@ async def client(tmp_path):
     db = tmp_path / "daily.db"
     storage = DailyRegistry()
     await storage.init_db(str(db))
-    app = create_app(storage, TZ, TOKEN, workdays=None)
+
+    async def membership_checker(chat_id, user_id):
+        return True
+
+    app = create_app(
+        storage,
+        TZ,
+        TOKEN,
+        workdays=None,
+        membership_checker=membership_checker,
+    )
     server = TestServer(app)
     await server.start_server()
     client = TestClient(server)
@@ -570,3 +580,299 @@ async def test_static_index_and_assets(client):
         assert resp.status == 200, path
         body = await resp.text()
         assert needle in body, path
+
+
+def _next_workday(day):
+    result = day + datetime.timedelta(days=1)
+    while result.weekday() >= 5:
+        result += datetime.timedelta(days=1)
+    return result
+
+
+@pytest.mark.asyncio
+async def test_state_includes_daily_settings_and_planned_vacations(client):
+    c, storage = client
+    from ppbot.daily import DailyChat, today_in_tz
+
+    await _seed_member(storage)
+    await storage.upsert_chat(
+        DailyChat(chat_id=-1001, daily_time="09:30", cost_reminder_enabled=True, cost_reminder_time="18:15")
+    )
+    today = today_in_tz(TZ)
+    await storage.add_vacation(
+        -1001,
+        0,
+        (today + datetime.timedelta(days=10)).isoformat(),
+        (today + datetime.timedelta(days=12)).isoformat(),
+    )
+    resp = await c.get("/api/state?chat=-1001", headers=_headers(make_init_data(user_id=777)))
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["settings"] == {
+        "daily_time": "09:30",
+        "cost_reminder_enabled": True,
+        "cost_reminder_time": "18:15",
+    }
+    assert data["daily"]["today"] == today.isoformat()
+    assert data["daily"]["members_count"] == 1
+    assert data["planned_vacations"][0]["start"] == (
+        today + datetime.timedelta(days=10)
+    ).isoformat()
+    assert "Дейлик-бот" in data["help"]
+
+
+@pytest.mark.asyncio
+async def test_add_member_by_name_and_duplicate(client):
+    c, storage = client
+    await _seed_member(storage)
+    headers = _headers(make_init_data(user_id=777))
+
+    resp = await c.post(
+        "/api/members",
+        json={"chat": -1001, "name": "Пётр @petrov"},
+        headers=headers,
+    )
+    assert resp.status == 200
+    members = await storage.get_members(-1001)
+    assert [m.username for m in members] == ["Иван", "Пётр @petrov"]
+    assert members[1].position == 1
+
+    resp = await c.post(
+        "/api/members",
+        json={"chat": -1001, "name": "Пётр @petrov"},
+        headers=headers,
+    )
+    assert resp.status == 400
+    assert "Уже в команде" in await resp.text()
+
+
+@pytest.mark.asyncio
+async def test_add_self_for_chat_member_not_in_roster(client):
+    c, storage = client
+    resp = await c.post(
+        "/api/members",
+        json={"chat": -1001, "mode": "self"},
+        headers=_headers(make_init_data(user_id=777)),
+    )
+    assert resp.status == 200
+    members = await storage.get_members(-1001)
+    assert len(members) == 1
+    assert members[0].user_id == 777
+    assert members[0].username == "Test"
+
+
+@pytest.mark.asyncio
+async def test_add_self_rejects_user_outside_chat(tmp_path):
+    from aiohttp.test_utils import TestClient, TestServer
+    from ppbot.daily_storage import DailyRegistry
+
+    storage = DailyRegistry()
+    await storage.init_db(str(tmp_path / "daily.db"))
+
+    async def membership_checker(chat_id, user_id):
+        return False
+
+    app = create_app(
+        storage, TZ, TOKEN, workdays=None, membership_checker=membership_checker
+    )
+    server = TestServer(app)
+    await server.start_server()
+    c = TestClient(server)
+    try:
+        resp = await c.post(
+            "/api/members",
+            json={"chat": -1001, "mode": "self"},
+            headers=_headers(make_init_data(user_id=777)),
+        )
+        assert resp.status == 403
+        assert await storage.get_members(-1001) == []
+    finally:
+        await c.close()
+        await server.close()
+        await storage.close()
+
+
+@pytest.mark.asyncio
+async def test_move_member(client):
+    c, storage = client
+    await _seed_member(storage, position=0, name="A")
+    await _seed_member(storage, position=1, name="B", user_id=778)
+    await _seed_member(storage, position=2, name="C", user_id=779)
+    resp = await c.post(
+        "/api/members/1/move",
+        json={"chat": -1001, "direction": "up"},
+        headers=_headers(make_init_data(user_id=777)),
+    )
+    assert resp.status == 200
+    assert (await resp.json())["moved"] is True
+    members = await storage.get_members(-1001)
+    assert [m.username for m in members] == ["B", "A", "C"]
+
+    resp = await c.post(
+        "/api/members/0/move",
+        json={"chat": -1001, "direction": "up"},
+        headers=_headers(make_init_data(user_id=777)),
+    )
+    assert resp.status == 200
+    assert (await resp.json())["moved"] is False
+
+
+@pytest.mark.asyncio
+async def test_delete_member(client):
+    c, storage = client
+    await _seed_member(storage, position=0, name="A")
+    await _seed_member(storage, position=1, name="B", user_id=778)
+    resp = await c.delete(
+        "/api/members/0?chat=-1001", headers=_headers(make_init_data(user_id=777))
+    )
+    assert resp.status == 200
+    members = await storage.get_members(-1001)
+    assert [m.username for m in members] == ["B"]
+    assert [m.position for m in members] == [0]
+
+    resp = await c.delete(
+        "/api/members/99?chat=-1001", headers=_headers(make_init_data(user_id=778))
+    )
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_update_settings(client):
+    c, storage = client
+    await _seed_member(storage)
+    headers = _headers(make_init_data(user_id=777))
+
+    resp = await c.put(
+        "/api/settings",
+        json={"chat": -1001, "daily_time": "09:15"},
+        headers=headers,
+    )
+    assert resp.status == 200
+    assert (await resp.json())["settings"]["daily_time"] == "09:15"
+
+    resp = await c.put(
+        "/api/settings",
+        json={
+            "chat": -1001,
+            "cost_reminder_enabled": True,
+            "cost_reminder_time": "18:45",
+        },
+        headers=headers,
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["settings"]["cost_reminder_enabled"] is True
+    assert body["settings"]["cost_reminder_time"] == "18:45"
+
+    resp = await c.put(
+        "/api/settings",
+        json={"chat": -1001, "daily_time": "25:99"},
+        headers=headers,
+    )
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_daily_leader_substitute_and_skip(client):
+    c, storage = client
+    from ppbot.daily import DailyChat, today_in_tz
+
+    await _seed_member(storage, position=0, name="A")
+    await _seed_member(storage, position=1, name="B", user_id=778)
+    await _seed_member(storage, position=2, name="C", user_id=779)
+    await storage.upsert_chat(DailyChat(chat_id=-1001, next_index=0))
+    today = today_in_tz(TZ)
+    other = _next_workday(today)
+    await storage.set_schedule(
+        -1001,
+        [(today.isoformat(), 0), (other.isoformat(), 1)],
+    )
+    headers = _headers(make_init_data(user_id=777))
+
+    resp = await c.post(
+        "/api/daily/leader",
+        json={"chat": -1001, "position": 2},
+        headers=headers,
+    )
+    assert resp.status == 200
+    assert "Сегодня ведёт C" in (await resp.json())["message"]
+    assert (await storage.get_chat(-1001)).next_index == 2
+
+    # Restore the schedule for a deterministic substitute.
+    await storage.set_schedule(
+        -1001,
+        [(today.isoformat(), 0), (other.isoformat(), 1)],
+    )
+    resp = await c.post(
+        "/api/daily/substitute",
+        json={"chat": -1001},
+        headers=headers,
+    )
+    assert resp.status == 200
+    assert "Сегодня ведёт B" in (await resp.json())["message"]
+    schedule = await storage.get_schedule(-1001)
+    assert schedule[today.isoformat()] == 1
+    assert schedule[other.isoformat()] == 0
+
+    resp = await c.post(
+        "/api/daily/skip",
+        json={"chat": -1001, "position": 1},
+        headers=headers,
+    )
+    assert resp.status == 200
+    members = await storage.get_members(-1001)
+    assert members[1].skip_date == today.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_new_endpoints_require_init_data_and_membership(client):
+    c, storage = client
+    await _seed_member(storage, user_id=777)
+
+    resp = await c.post("/api/members", json={"chat": -1001, "name": "X"})
+    assert resp.status == 401
+
+    resp = await c.post(
+        "/api/members",
+        json={"chat": -1001, "name": "X"},
+        headers=_headers(make_init_data(user_id=999)),
+    )
+    assert resp.status == 403
+
+    resp = await c.put(
+        "/api/settings",
+        json={"chat": -1001, "daily_time": "09:00"},
+        headers=_headers(make_init_data(user_id=999)),
+    )
+    assert resp.status == 403
+
+    resp = await c.post(
+        "/api/daily/substitute",
+        json={"chat": -1001},
+        headers=_headers(make_init_data(user_id=999)),
+    )
+    assert resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_index_contains_daily_team_and_settings_views(client):
+    c, storage = client
+    resp = await c.get("/")
+    assert resp.status == 200
+    body = await resp.text()
+    for needle in (
+        'data-tab="daily"',
+        'data-tab="team"',
+        'data-tab="vacations"',
+        'data-tab="settings"',
+        'id="daily-summary"',
+        'id="team-list"',
+        'id="planned-list"',
+        'id="daily-time-input"',
+        'id="cost-toggle-btn"',
+        'id="help-text"',
+    ):
+        assert needle in body
+    code = (await (await c.get("/static/app.js")).text())
+    for needle in ("renderDaily", "renderTeam", "renderSettings", "actionRequest"):
+        assert needle in code
